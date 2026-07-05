@@ -85,6 +85,10 @@ server/**/*.db-journal
 server/**/*.db-wal
 server/**/*.db-shm
 
+# --- Native C++ 本地编译 scratch (client/core/12c_file_transfer_scheme) ---------
+
+build-test/
+
 # --- WASM / Emscripten (client/core/twelve_c_wasm) ------------------------------
 
 client/core/twelve_c_wasm/build/
