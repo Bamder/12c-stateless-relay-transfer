@@ -293,9 +293,14 @@ async function handleSend(): Promise<void> {
 
   el.sendBtn.disabled = true;
   el.copyCredentialBtn.disabled = true;
-  display.startSpinning();
+  display.startBreathing();
 
-  const bytes = new Uint8Array(await selectedFile.arrayBuffer());
+  const bytesPromise = selectedFile
+    .arrayBuffer()
+    .then((buffer) => new Uint8Array(buffer));
+  await display.enterReelWhenReady(bytesPromise);
+  const bytes = await bytesPromise;
+
   const maxAttempts = DEFAULT_MAX_RESERVATION_ATTEMPTS;
   let lastOccupiedTokens: OccupiedTokenInfo[] = [];
 
@@ -310,7 +315,7 @@ async function handleSend(): Promise<void> {
           client.twelveC,
           selectedFile.name,
         );
-        await display.reveal(credential);
+        await display.revealSequential(credential);
         el.copyCredentialBtn.disabled = false;
 
         const { replicaSync } = await uploadPrepared(
@@ -339,8 +344,7 @@ async function handleSend(): Promise<void> {
         }
 
         lastOccupiedTokens = error.occupiedTokens;
-        display.reset();
-        display.startSpinning();
+        display.startReelSpinning();
 
         if (attempt < maxAttempts) {
           continue;

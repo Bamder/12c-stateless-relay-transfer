@@ -1,6 +1,9 @@
 import { CREDENTIAL_LENGTH } from '@stateless-relay/transfer';
 
 const WAITING_TEXT = 'WAITING4-12C';
+const BREATHING_MIN_MS = 900;
+const REEL_SPIN_INTERVAL_MS = 70;
+const REVEAL_STEP_MS = 70;
 
 const SPIN_ALPHABET =
   'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
@@ -18,7 +21,6 @@ function delay(ms: number): Promise<void> {
 export class CredentialSlotDisplay {
   private readonly slots: HTMLElement[] = [];
   private spinTimer: number | null = null;
-  private waitingTimer: number | null = null;
   private credential = '';
 
   constructor(container: HTMLElement) {
@@ -37,7 +39,7 @@ export class CredentialSlotDisplay {
   }
 
   reset(): void {
-    this.stopSpinning();
+    this.stopReelTimer();
     this.credential = '';
     for (const slot of this.slots) {
       slot.textContent = '';
@@ -45,8 +47,9 @@ export class CredentialSlotDisplay {
     }
   }
 
-  startSpinning(): void {
-    this.stopSpinning();
+  /** 显示 WAITING4-12C 呼吸动画（文件导入阶段）。 */
+  startBreathing(): void {
+    this.stopReelTimer();
     this.credential = '';
 
     if (WAITING_TEXT.length !== CREDENTIAL_LENGTH) {
@@ -58,56 +61,66 @@ export class CredentialSlotDisplay {
       slot.className = 'credential-slot credential-slot--spinning credential-slot--waiting';
       slot.textContent = WAITING_TEXT[index]!;
     }
+  }
 
-    this.waitingTimer = window.setTimeout(() => {
-      this.waitingTimer = null;
+  /**
+   * 呼吸至少 minBreathingMs，且 importReady 完成后进入滚筒：
+   * 全部字符蓝色滚动，直至 revealSequential。
+   */
+  async enterReelWhenReady(
+    importReady: Promise<unknown>,
+    minBreathingMs = BREATHING_MIN_MS,
+  ): Promise<void> {
+    await Promise.all([delay(minBreathingMs), importReady]);
+    this.startReelSpinning();
+  }
+
+  /** 全格蓝色随机滚动（加密阶段保持此状态）。 */
+  startReelSpinning(): void {
+    this.stopReelTimer();
+
+    for (const slot of this.slots) {
+      slot.className = 'credential-slot credential-slot--spinning';
+      slot.textContent = randomChar();
+    }
+
+    this.spinTimer = window.setInterval(() => {
       for (const slot of this.slots) {
-        slot.classList.remove('credential-slot--waiting');
-      }
-      this.spinTimer = window.setInterval(() => {
-        for (const slot of this.slots) {
-          if (slot.classList.contains('credential-slot--spinning')) {
-            slot.textContent = randomChar();
-          }
+        if (slot.classList.contains('credential-slot--spinning')) {
+          slot.textContent = randomChar();
         }
-      }, 70);
-    }, 900);
+      }
+    }, REEL_SPIN_INTERVAL_MS);
   }
 
-  stopSpinning(): void {
-    if (this.waitingTimer !== null) {
-      window.clearTimeout(this.waitingTimer);
-      this.waitingTimer = null;
-    }
-    if (this.spinTimer !== null) {
-      window.clearInterval(this.spinTimer);
-      this.spinTimer = null;
-    }
-  }
-
-  /** 逐格减速停到最终凭证字符（老虎机落位）。 */
-  async reveal(credential: string): Promise<void> {
+  /** 加密完成后：逐格停到正确字符并变绿，相邻间隔 stepMs。 */
+  async revealSequential(
+    credential: string,
+    stepMs = REVEAL_STEP_MS,
+  ): Promise<void> {
     if (credential.length !== CREDENTIAL_LENGTH) {
       throw new Error(`credential length must be ${CREDENTIAL_LENGTH}`);
     }
 
-    this.stopSpinning();
     this.credential = credential;
 
     for (let index = 0; index < CREDENTIAL_LENGTH; index++) {
       const slot = this.slots[index]!;
-      const finalChar = credential[index]!;
-
-      for (let tick = 0; tick < 6; tick++) {
-        slot.textContent = randomChar();
-        await delay(45 + tick * 8);
-      }
-
       slot.className = 'credential-slot credential-slot--settled';
-      slot.textContent = finalChar;
-      await delay(90);
+      slot.textContent = credential[index]!;
+
+      if (index < CREDENTIAL_LENGTH - 1) {
+        await delay(stepMs);
+      }
     }
 
-    this.stopSpinning();
+    this.stopReelTimer();
+  }
+
+  private stopReelTimer(): void {
+    if (this.spinTimer !== null) {
+      window.clearInterval(this.spinTimer);
+      this.spinTimer = null;
+    }
   }
 }
