@@ -34,23 +34,27 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$scriptPath = $PSCommandPath
-if ([string]::IsNullOrWhiteSpace($scriptPath)) {
-    $scriptPath = $MyInvocation.MyCommand.Path
-}
-if ([string]::IsNullOrWhiteSpace($scriptPath)) {
-    throw @"
-Cannot resolve script path.
+$ProjectDir = $PSScriptRoot
+if ([string]::IsNullOrWhiteSpace($ProjectDir)) {
+    $scriptPath = $PSCommandPath
+    if ([string]::IsNullOrWhiteSpace($scriptPath)) {
+        $scriptPath = $MyInvocation.MyCommand.Path
+    }
+    if ([string]::IsNullOrWhiteSpace($scriptPath)) {
+        throw @"
+Cannot resolve script directory.
 
 Run:
   cd client\core\twelve_c_wasm
   .\build-wasm.ps1 -EmsdkRoot P:\_Tools\emsdk
 "@
+    }
+    $ProjectDir = [System.IO.Path]::GetDirectoryName($scriptPath)
 }
-$ProjectDir = [System.IO.Path]::GetDirectoryName($scriptPath)
 if ([string]::IsNullOrWhiteSpace($ProjectDir)) {
-    throw "Failed to resolve ProjectDir from: $scriptPath"
+    throw "Failed to resolve ProjectDir"
 }
+Set-Location $ProjectDir
 $BuildDir = Join-Path $ProjectDir "build"
 # client/transfer/src/wasm/pkg (not client/transfer/wasm/pkg)
 $TransferRoot = Join-Path $ProjectDir "..\..\transfer"

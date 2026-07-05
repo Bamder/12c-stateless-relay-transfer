@@ -10,22 +10,18 @@
 
 ## 启动
 
+**推荐**在 `client/` 根目录使用一键脚本（见 [`client/README.md`](../README.md)）：
+
 ```powershell
-cd client\web
+cd client
 .\start.ps1
 ```
 
-```bash
-cd client/web
-./start.sh
-```
+或仅启动 Web（须已构建 WASM）：
 
-或手动：
-
-```bash
-cd client/web
-npm install   # 在 client 根目录执行一次即可
-npm run dev
+```powershell
+cd client\web
+.\start.ps1
 ```
 
 浏览器默认打开 `http://127.0.0.1:5173`。
@@ -47,7 +43,9 @@ npm run dev
 ## 构建
 
 ```powershell
-npm run build
+cd client
+.\build.ps1 -Production
+cd web
 npm run preview
 ```
 

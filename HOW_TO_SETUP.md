@@ -474,5 +474,5 @@ Client 构建详见 [自动化脚本](#自动化脚本推荐)。
 | [`server/registry/README.md`](server/registry/README.md) | Registry API、Allowlist |
 | [`server/relay/README.md`](server/relay/README.md) | Relay 密钥与块存储 |
 | [`server/console/README.md`](server/console/README.md) | 控制面板功能 |
-| [`client/web/README.md`](client/web/README.md) | Web UI 与 copy:wasm 说明 |
+| [`client/README.md`](client/README.md) | Client 构建脚本清单 |
 | [`client/core/twelve_c_wasm/README.md`](client/core/twelve_c_wasm/README.md) | WASM 构建细节 |
