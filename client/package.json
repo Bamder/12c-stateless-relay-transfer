@@ -1,0 +1,17 @@
+{
+  "name": "stateless-relay-client",
+  "private": true,
+  "workspaces": [
+    "transfer",
+    "app",
+    "web"
+  ],
+  "scripts": {
+    "build": "powershell -ExecutionPolicy Bypass -File ./build.ps1",
+    "build:sh": "bash ./build.sh",
+    "build:prod": "powershell -ExecutionPolicy Bypass -File ./build.ps1 -Production",
+    "build:prod:sh": "bash ./build.sh --production",
+    "start": "powershell -ExecutionPolicy Bypass -File ./start.ps1",
+    "start:sh": "bash ./start.sh"
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "host": "127.0.0.1",
+  "port": 8070,
+  "registryBaseUrl": "http://127.0.0.1:8080",
+  "relayBaseUrl": "http://127.0.0.1:9090",
+  "staticDir": "./static",
+  "registryDir": "../registry",
+  "relayDir": "../relay",
+  "registryConfig": "registry_server.config.json",
+  "relayConfig": "relay_server.config.json"
+}

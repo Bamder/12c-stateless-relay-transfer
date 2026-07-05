@@ -1,0 +1,101 @@
+# =============================================================================
+# 12C Stateless Relay Transfer — root .gitignore
+# 汇总 client / server / WASM 构建产物、本地配置与密钥；子目录 .gitignore 仍有效。
+# =============================================================================
+
+# --- OS / 编辑器 ----------------------------------------------------------------
+
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.swp
+*~
+
+.idea/
+*.iml
+.vscode/
+!.vscode/extensions.json
+!.vscode/settings.json.example
+
+# --- 环境与日志 -----------------------------------------------------------------
+
+.env
+.env.*
+!.env.example
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# --- Node / Client (workspaces) -------------------------------------------------
+
+node_modules/
+**/node_modules/
+
+# TypeScript / Vite 构建产物
+client/**/dist/
+client/**/.vite/
+*.tsbuildinfo
+
+# WASM 二进制（由 build-wasm + copy:wasm 生成）
+**/*.wasm
+
+# 本地 Relay 配置（保留 example 与 Web 默认开发配置）
+**/relay.config.json
+!**/relay.config.example.json
+!client/web/public/relay.config.json
+
+# --- Python / Server ------------------------------------------------------------
+
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+.venv/
+venv/
+ENV/
+env/
+
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+*.egg-info/
+.eggs/
+
+# 本地服务配置（从 *.config.example.json 复制；密钥单独见 *.secrets.json）
+**/*_server.config.json
+!**/*_server.config.example.json
+
+# 自动生成的 Admin / 主密钥等（切勿提交）
+*.secrets.json
+
+# Registry / Relay 运行时数据（SQLite、磁盘块、RSA 密钥等）
+server/registry/data/
+server/relay/data/
+server/**/data/secrets/
+server/**/*.db
+server/**/*.db-journal
+server/**/*.db-wal
+server/**/*.db-shm
+
+# --- WASM / Emscripten (client/core/twelve_c_wasm) ------------------------------
+
+client/core/twelve_c_wasm/build/
+client/core/twelve_c_wasm/third_party/openssl-emscripten/
+client/core/twelve_c_wasm/third_party/openssl-*/
+client/core/twelve_c_wasm/third_party/*.tar.gz
+client/core/twelve_c_wasm/third_party/*.tar.xz
+client/core/twelve_c_wasm/third_party/*.zip
+
+# --- 杂项 -----------------------------------------------------------------------
+
+*.tmp
+*.temp
+.cache/

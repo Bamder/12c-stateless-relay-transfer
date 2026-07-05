@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>12C 控制面板</title>
+  <link rel="stylesheet" href="/assets/styles.css" />
+</head>
+<body>
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="brand">12C Console</div>
+      <nav class="nav">
+        <button type="button" class="nav-item active" data-panel="registry">Registry</button>
+        <button type="button" class="nav-item" data-panel="relay">Relay</button>
+      </nav>
+
+      <div class="service-controls">
+        <div class="service-controls-title">本地服务</div>
+        <div class="service-row">
+          <span class="service-dot" id="registry-service-dot" data-state="unknown"></span>
+          <div class="service-meta">
+            <span class="service-name">Registry</span>
+            <span class="service-hint" id="registry-service-hint"></span>
+          </div>
+          <button type="button" id="start-registry-btn" class="service-btn" data-phase="idle" data-action="start">
+            <span class="service-btn-label">启动</span>
+          </button>
+        </div>
+        <div class="service-row">
+          <span class="service-dot" id="relay-service-dot" data-state="unknown"></span>
+          <div class="service-meta">
+            <span class="service-name">Relay</span>
+            <span class="service-hint" id="relay-service-hint"></span>
+          </div>
+          <button type="button" id="start-relay-btn" class="service-btn" data-phase="idle" data-action="start">
+            <span class="service-btn-label">启动</span>
+          </button>
+        </div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <section id="panel-registry" class="panel active">
+        <header class="panel-header">
+          <div>
+            <h1>Registry</h1>
+            <p class="subtitle">已注册Relay节点状态</p>
+          </div>
+          <div class="panel-actions">
+            <button type="button" id="registry-db-btn" class="icon-btn db-icon-btn" aria-label="数据库" title="数据库">
+              <svg class="db-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <ellipse cx="12" cy="5" rx="9" ry="3" />
+                <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5" />
+                <path d="M3 12c0 1.66 4 3 9 3s9-1.34 9-3" />
+              </svg>
+            </button>
+            <button type="button" id="registry-refresh-btn" class="icon-btn refresh-icon-btn" data-panel="registry" aria-label="刷新" title="刷新">
+              <svg class="refresh-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M1 4v6h6" />
+                <path d="M23 20v-6h-6" />
+                <path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15" />
+              </svg>
+            </button>
+            <button type="button" id="registration-inbox-btn" class="icon-btn inbox-btn" aria-label="注册申请" title="注册申请">
+              <svg class="inbox-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <rect x="2" y="4" width="20" height="16" rx="2" />
+                <path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7" />
+              </svg>
+              <span id="registration-inbox-badge" class="inbox-badge hidden">0</span>
+            </button>
+          </div>
+        </header>
+
+        <div id="registry-info" class="banner info hidden"></div>
+
+        <div id="registry-error" class="banner error hidden"></div>
+
+        <div id="registry-main-view" class="panel-main-view">
+          <h2 class="section-title">Relay 概览</h2>
+          <div id="relay-grid" class="relay-grid"></div>
+        </div>
+
+        <div id="registry-db-view" class="panel-db-view hidden">
+          <div class="db-view-toolbar">
+            <button type="button" id="registry-db-back-btn" class="icon-btn db-back-btn" aria-label="返回概览" title="返回概览">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M19 12H5" />
+                <path d="m12 19-7-7 7-7" />
+              </svg>
+            </button>
+            <h2 class="db-view-title">数据库</h2>
+          </div>
+          <div id="registry-db-tabs" class="db-tabs" role="tablist"></div>
+          <div id="registry-db" class="db-viewer"></div>
+        </div>
+      </section>
+
+      <section id="panel-relay" class="panel">
+        <header class="panel-header">
+          <div>
+            <h1>Relay</h1>
+            <p class="subtitle">本地块存储与运行状态</p>
+          </div>
+          <div class="panel-actions">
+            <button type="button" id="relay-db-btn" class="icon-btn db-icon-btn" aria-label="数据库" title="数据库">
+              <svg class="db-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <ellipse cx="12" cy="5" rx="9" ry="3" />
+                <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5" />
+                <path d="M3 12c0 1.66 4 3 9 3s9-1.34 9-3" />
+              </svg>
+            </button>
+            <button type="button" id="relay-refresh-btn" class="icon-btn refresh-icon-btn" data-panel="relay" aria-label="刷新" title="刷新">
+              <svg class="refresh-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M1 4v6h6" />
+                <path d="M23 20v-6h-6" />
+                <path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15" />
+              </svg>
+            </button>
+            <button type="button" id="relay-register-btn" class="ghost-btn panel-text-btn">申请注册</button>
+          </div>
+        </header>
+
+        <div id="relay-info" class="banner info hidden"></div>
+        <div id="relay-error" class="banner error hidden"></div>
+
+        <div id="relay-main-view" class="panel-main-view">
+          <div id="relay-overview" class="overview-cards"></div>
+        </div>
+
+        <div id="relay-db-view" class="panel-db-view hidden">
+          <div class="db-view-toolbar">
+            <button type="button" id="relay-db-back-btn" class="icon-btn db-back-btn" aria-label="返回概览" title="返回概览">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M19 12H5" />
+                <path d="m12 19-7-7 7-7" />
+              </svg>
+            </button>
+            <h2 class="db-view-title">数据库</h2>
+          </div>
+          <div id="relay-db-tabs" class="db-tabs" role="tablist"></div>
+          <div id="relay-db" class="db-viewer"></div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div id="service-context-menu" class="context-menu hidden">
+    <button type="button" data-action="start-detached">启动独立进程</button>
+  </div>
+
+  <div id="context-menu" class="context-menu hidden">
+    <button type="button" data-action="manage">管理</button>
+    <button type="button" data-action="remove" class="danger">从池中移除</button>
+    <button type="button" data-action="undo" class="hidden">撤销移除</button>
+  </div>
+
+  <div id="db-context-menu" class="context-menu hidden">
+    <button type="button" data-action="delete-row" class="danger">删除此行</button>
+  </div>
+
+  <dialog id="relay-register-dialog" class="dialog">
+    <form method="dialog" id="relay-register-form">
+      <h3>向 Registry 申请注册</h3>
+      <div id="relay-register-error" class="banner error hidden dialog-error"></div>
+      <label>
+        Registry URL
+        <input name="registryUrl" required placeholder="http://127.0.0.1:8080" />
+      </label>
+      <button type="button" id="fill-local-registry-btn" class="ghost-btn dialog-fill-btn">
+        填充本地 Registry
+      </button>
+      <div class="dialog-actions dialog-actions-split">
+        <button type="button" value="cancel" class="ghost-btn">取消</button>
+        <button type="submit" value="confirm" class="primary-btn">提交申请</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="registration-inbox-dialog" class="dialog dialog-wide">
+    <h3>Relay 注册申请</h3>
+    <div id="registration-inbox-error" class="banner error hidden dialog-error"></div>
+    <div id="registration-inbox-list" class="registration-inbox-list"></div>
+    <div class="dialog-actions registration-inbox-footer">
+      <button type="button" id="registration-inbox-close-btn" class="ghost-btn dialog-close-compact">关闭</button>
+    </div>
+  </dialog>
+
+  <dialog id="manage-relay-dialog" class="dialog">
+    <form method="dialog" id="manage-relay-form">
+      <h3 id="manage-relay-title">管理 Relay</h3>
+      <input type="hidden" name="relayId" />
+      <label>
+        Relay Base URL
+        <input name="relayBaseUrl" />
+      </label>
+      <label class="checkbox-row">
+        <input type="checkbox" name="enabled" checked />
+        启用（在 Allowlist 中）
+      </label>
+      <div class="dialog-actions">
+        <button type="button" value="cancel" class="ghost-btn">取消</button>
+        <button type="submit" value="confirm" class="primary-btn">保存</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="url-tooltip-float" class="url-tooltip-float hidden" role="tooltip"></div>
+
+  <script src="/assets/app.js" type="module"></script>
+</body>
+</html>

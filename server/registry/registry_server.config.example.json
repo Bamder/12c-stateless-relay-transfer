@@ -1,0 +1,12 @@
+{
+  "host": "0.0.0.0",
+  "port": 8080,
+  "databasePath": "./data/registry.db",
+  "registryApiKeyInitialUses": 100,
+  "stripeTargetRelays": 3,
+  "maxFileReplicaCount": 1,
+  "maxReplicasPerBlock": 2,
+  "relayHeartbeatStaleSeconds": 120,
+  "heartbeatUrlPolicy": "sync_if_unset",
+  "allowlist": []
+}
