@@ -22,6 +22,7 @@
     "setup:emsdk": "powershell -ExecutionPolicy Bypass -File ../core/twelve_c_wasm/setup-emsdk.ps1",
     "setup:emsdk:sh": "bash ../core/twelve_c_wasm/setup-emsdk.sh",
     "build:openssl:wasm": "powershell -ExecutionPolicy Bypass -File ../core/twelve_c_wasm/build-openssl-emscripten.ps1",
+    "build:openssl:wasm:sh": "bash ../core/twelve_c_wasm/build-openssl-emscripten.sh",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {

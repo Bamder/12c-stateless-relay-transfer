@@ -12,6 +12,14 @@
     "build:prod": "powershell -ExecutionPolicy Bypass -File ./build.ps1 -Production",
     "build:prod:sh": "bash ./build.sh --production",
     "start": "powershell -ExecutionPolicy Bypass -File ./start.ps1",
-    "start:sh": "bash ./start.sh"
+    "start:sh": "bash ./start.sh",
+    "setup:emsdk": "powershell -ExecutionPolicy Bypass -File ./core/twelve_c_wasm/setup-emsdk.ps1",
+    "setup:emsdk:sh": "bash ./core/twelve_c_wasm/setup-emsdk.sh",
+    "build:wasm": "powershell -ExecutionPolicy Bypass -File ./core/twelve_c_wasm/build-wasm.ps1",
+    "build:wasm:sh": "bash ./core/twelve_c_wasm/build-wasm.sh",
+    "build:openssl:wasm": "powershell -ExecutionPolicy Bypass -File ./core/twelve_c_wasm/build-openssl-emscripten.ps1",
+    "build:openssl:wasm:sh": "bash ./core/twelve_c_wasm/build-openssl-emscripten.sh",
+    "build:native": "powershell -ExecutionPolicy Bypass -File ./core/build-native.ps1",
+    "build:native:sh": "bash ./core/build-native.sh"
   }
 }

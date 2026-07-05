@@ -89,6 +89,8 @@ server/**/*.db-shm
 
 build-test/
 
+# Client 构建脚本（*.ps1 / *.sh / copy-wasm.mjs）须纳入版本库，见 client/README.md
+
 # --- WASM / Emscripten (client/core/twelve_c_wasm) ------------------------------
 
 client/core/twelve_c_wasm/build/
