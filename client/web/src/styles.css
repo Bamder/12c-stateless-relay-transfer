@@ -450,6 +450,16 @@ input[type="file"] {
   box-shadow: inset 0 0 0 1px rgba(22, 163, 74, 0.25);
 }
 
+.file-dropzone.is-disabled {
+  pointer-events: none;
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
+.file-dropzone.is-disabled:hover {
+  border-color: var(--border);
+}
+
 .file-dropzone-empty {
   color: var(--muted);
   font-size: 0.95rem;

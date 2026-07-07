@@ -10,20 +10,24 @@
 
 | 脚本 | 平台 | 作用 |
 |------|------|------|
-| [`build.ps1`](build.ps1) | Windows | 一键：`npm install` → WASM（若缺）→ `copy:wasm` → 可选 `-Production` |
+| [`build.ps1`](build.ps1) | Windows | 一键：`npm install` → `build-ts` → WASM（若缺）→ `copy:wasm` → 可选 `-Production` |
 | [`build.sh`](build.sh) | Unix | 同上 |
+| [`build-ts.ps1`](build-ts.ps1) | Windows | 仅编译 `transfer` / `app` TypeScript → `dist/` |
+| [`build-ts.sh`](build-ts.sh) | Unix | 同上 |
 | [`start.ps1`](start.ps1) | Windows | 构建（如需）+ 启动 Vite dev |
 | [`start.sh`](start.sh) | Unix | 同上 |
 
 等效 npm（在 `client/` 目录）：
 
 ```bash
-npm run build          # → build.ps1
+npm run build          # → build.ps1（ts + wasm + copy）
 npm run build:sh       # → build.sh
+npm run build:ts       # → build-ts.ps1（仅 TypeScript）
+npm run build:ts:sh    # → build-ts.sh
 npm run build:prod     # → build.ps1 -Production
 npm run start          # → start.ps1
 npm run start:sh       # → start.sh
-npm run build:wasm     # → twelve_c_wasm/build-wasm.ps1
+npm run build:wasm     # → twelve_c_wasm/build-wasm.ps1（仅 WASM）
 npm run setup:emsdk    # → twelve_c_wasm/setup-emsdk.ps1
 npm run build:native   # → core/build-native.ps1
 ```

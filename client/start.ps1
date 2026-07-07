@@ -21,13 +21,18 @@ param(
 $ErrorActionPreference = "Stop"
 $ClientRoot = $PSScriptRoot
 $WasmPkg = Join-Path $ClientRoot "transfer\src\wasm\pkg\twelve_c_cryptography.wasm"
+$AppDist = Join-Path $ClientRoot "app\dist\index.d.ts"
 
 if (-not $SkipBuild) {
-    $needsBuild = -not (Test-Path $WasmPkg) -or -not (Test-Path (Join-Path $ClientRoot "node_modules"))
-    if ($needsBuild) {
+    $needsFullBuild = -not (Test-Path $WasmPkg) -or -not (Test-Path (Join-Path $ClientRoot "node_modules"))
+    if ($needsFullBuild) {
         Write-Host "首次运行或缺少 WASM，正在执行 build.ps1 ..." -ForegroundColor Yellow
         & (Join-Path $ClientRoot "build.ps1")
     } else {
+        if (-not (Test-Path $AppDist)) {
+            Write-Host "缺少 TypeScript dist，正在执行 build-ts.ps1 ..." -ForegroundColor Yellow
+            & (Join-Path $ClientRoot "build-ts.ps1")
+        }
         # 确保 public/wasm 与 pkg 同步
         Set-Location (Join-Path $ClientRoot "web")
         npm run copy:wasm

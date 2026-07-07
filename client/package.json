@@ -9,6 +9,8 @@
   "scripts": {
     "build": "powershell -ExecutionPolicy Bypass -File ./build.ps1",
     "build:sh": "bash ./build.sh",
+    "build:ts": "powershell -ExecutionPolicy Bypass -File ./build-ts.ps1",
+    "build:ts:sh": "bash ./build-ts.sh",
     "build:prod": "powershell -ExecutionPolicy Bypass -File ./build.ps1 -Production",
     "build:prod:sh": "bash ./build.sh --production",
     "start": "powershell -ExecutionPolicy Bypass -File ./start.ps1",

@@ -1,9 +1,15 @@
 #!/usr/bin/env bash
-# 一键构建 Client：npm install → WASM（如需）→ copy:wasm → 可选生产打包
+# 一键构建 Client：npm install → build-ts → build-wasm（如需）→ copy:wasm → 可选生产打包
+#
+# 子步骤可单独执行：
+#   ./build-ts.sh          # 仅编译 transfer / app TypeScript
+#   npm run build:wasm     # 仅编译 WASM（core/twelve_c_wasm）
 #
 # 用法：
 #   ./build.sh
 #   ./build.sh --setup-emsdk /opt/emsdk
+#   ./build.sh --skip-ts
+#   ./build.sh --skip-wasm
 #   ./build.sh --force-wasm
 #   ./build.sh --production
 #   ./start.sh
@@ -15,6 +21,7 @@ WASM_SCRIPT_DIR="${CLIENT_ROOT}/core/twelve_c_wasm"
 WEB_DIR="${CLIENT_ROOT}/web"
 
 SETUP_EMSDK=0
+SKIP_TS=0
 SKIP_WASM=0
 FORCE_WASM=0
 PRODUCTION=0
@@ -26,6 +33,7 @@ Usage: ./build.sh [OPTIONS]
 
   --setup-emsdk [ROOT]   先安装 emsdk（首次）
   --emsdk-root ROOT      emsdk 根目录（传给 build-wasm）
+  --skip-ts              跳过 TypeScript 编译
   --skip-wasm            跳过 WASM 编译
   --force-wasm           强制重编 WASM
   --production           额外 vite build → web/dist/
@@ -46,6 +54,7 @@ while [[ $# -gt 0 ]]; do
       EMSDK_ROOT="${2:?missing value for --emsdk-root}"
       shift
       ;;
+    --skip-ts) SKIP_TS=1 ;;
     --skip-wasm) SKIP_WASM=1 ;;
     --force-wasm) FORCE_WASM=1 ;;
     --production) PRODUCTION=1 ;;
@@ -67,6 +76,12 @@ if [[ ! -d node_modules ]]; then
   npm install
 else
   echo "node_modules 已存在，跳过 npm install"
+fi
+
+if [[ "${SKIP_TS}" -eq 0 ]]; then
+  "${CLIENT_ROOT}/build-ts.sh"
+else
+  echo "已跳过 TypeScript 编译（--skip-ts）"
 fi
 
 if [[ "${SETUP_EMSDK}" -eq 1 ]]; then
