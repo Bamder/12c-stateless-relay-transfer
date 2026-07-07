@@ -1,4 +1,7 @@
+const WELCOME_LEAVE_MS = 520;
+
 const state = {
+  consoleEntered: false,
   panel: "registry",
   view: "main",
   dbActiveTab: { registry: null, relay: null },
@@ -16,6 +19,9 @@ const state = {
 };
 
 const el = {
+  welcomeScreen: document.getElementById("welcome-screen"),
+  appLayout: document.getElementById("app-layout"),
+  welcomeCards: document.querySelectorAll(".welcome-card"),
   navItems: document.querySelectorAll(".nav-item"),
   panels: document.querySelectorAll(".panel"),
   relayGrid: document.getElementById("relay-grid"),
@@ -229,11 +235,13 @@ function statusLabel(healthStatus) {
 }
 
 function relayInitials(relayId) {
-  const parts = relayId.split(/[-_]/).filter(Boolean);
-  if (parts.length >= 2) {
-    return (parts[0][0] + parts[1][0]).toUpperCase();
-  }
-  return relayId.slice(0, 2).toUpperCase();
+  const id = String(relayId || "").trim();
+  if (!id) return "R";
+  const slug = id.replace(/^relay[-_]/i, "");
+  const source = slug || id;
+  const first = source[0].toUpperCase();
+  const last = source[source.length - 1].toUpperCase();
+  return `R${first}${last}`;
 }
 
 function isPendingRemoval(relayId) {
@@ -347,7 +355,12 @@ function renderDbTableContent(container, table, tableName, panelSource) {
   const rows = table.rows || [];
   const columns = rows.length ? Object.keys(rows[0]) : [];
   const primaryKey = resolveDbPrimaryKey(panelSource, tableName, table);
-  const head = columns.map((col) => `<th>${escapeHtml(col)}</th>`).join("");
+  const head = columns
+    .map(
+      (col) =>
+        `<th><span class="db-cell db-cell--header" data-full-text="${escapeHtml(col)}">${escapeHtml(col)}</span></th>`,
+    )
+    .join("");
   const body = rows
     .map((row) => {
       const keys = buildDbRowKeys(row, primaryKey);
@@ -355,7 +368,12 @@ function renderDbTableContent(container, table, tableName, panelSource) {
       const rowAttrs = deletable
         ? ` class="db-row" data-panel="${escapeHtml(panelSource)}" data-table="${escapeHtml(tableName)}" data-keys="${encodeDbRowPayload(keys)}"`
         : "";
-      return `<tr${rowAttrs}>${columns.map((col) => `<td>${escapeHtml(formatCell(row[col]))}</td>`).join("")}</tr>`;
+      return `<tr${rowAttrs}>${columns
+        .map((col) => {
+          const text = formatCell(row[col]);
+          return `<td><span class="db-cell db-cell--value" data-full-text="${escapeHtml(text)}">${escapeHtml(text)}</span></td>`;
+        })
+        .join("")}</tr>`;
     })
     .join("");
   const truncated = table.truncated ? "（已截断）" : "";
@@ -370,6 +388,7 @@ function renderDbTableContent(container, table, tableName, panelSource) {
       </div>
     </section>`;
   bindDbRowContextMenu(container);
+  bindDbCellTooltips(container);
 }
 
 function selectDbTab(panelSource, tableName) {
@@ -479,16 +498,101 @@ function renderRelayOverview(overview, health) {
   bindUrlTooltips();
 }
 
-function showUrlTooltip(anchor) {
-  const url = anchor.dataset.fullUrl;
-  if (!url || !el.urlTooltipFloat) return;
-  el.urlTooltipFloat.textContent = url;
+function showFloatTooltip(anchor, text) {
+  const content = text ?? anchor.dataset.fullText ?? anchor.dataset.fullUrl;
+  if (!content || !el.urlTooltipFloat) return;
+  el.urlTooltipFloat.textContent = content;
   el.urlTooltipFloat.classList.remove("hidden");
   positionUrlTooltip(anchor, el.urlTooltipFloat);
 }
 
+function showUrlTooltip(anchor) {
+  showFloatTooltip(anchor, anchor.dataset.fullUrl);
+}
+
 function hideUrlTooltip() {
   el.urlTooltipFloat?.classList.add("hidden");
+}
+
+function truncateMiddleByLength(text, visibleLen) {
+  if (visibleLen >= text.length) return text;
+  if (visibleLen <= 1) return "…";
+  const keep = visibleLen - 1;
+  const front = Math.ceil(keep / 2);
+  const back = Math.floor(keep / 2);
+  return `${text.slice(0, front)}…${text.slice(text.length - back)}`;
+}
+
+function applyDbHeaderEllipsis(cell) {
+  const fullText = cell.dataset.fullText || "";
+  cell.textContent = fullText;
+  if (!fullText || cell.scrollWidth <= cell.clientWidth) {
+    return;
+  }
+
+  let lo = 1;
+  let hi = fullText.length;
+  let best = "…";
+  while (lo <= hi) {
+    const mid = Math.floor((lo + hi) / 2);
+    const candidate = truncateMiddleByLength(fullText, mid);
+    cell.textContent = candidate;
+    if (cell.scrollWidth <= cell.clientWidth) {
+      best = candidate;
+      lo = mid + 1;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  cell.textContent = best;
+}
+
+function isDbCellTruncated(cell) {
+  const fullText = cell.dataset.fullText || "";
+  if (!fullText) return false;
+  if (cell.classList.contains("db-cell--header")) {
+    return cell.textContent !== fullText;
+  }
+  return cell.scrollWidth > cell.clientWidth;
+}
+
+function bindDbCellTooltips(container) {
+  if (!el.urlTooltipFloat) return;
+
+  const bindCells = () => {
+    const cells = container.querySelectorAll(".db-cell[data-full-text]");
+    for (const cell of cells) {
+      if (cell.classList.contains("db-cell--header")) {
+        applyDbHeaderEllipsis(cell);
+      }
+      cell.dataset.truncated = isDbCellTruncated(cell) ? "true" : "false";
+      if (cell.dataset.truncated === "true") {
+        cell.tabIndex = 0;
+      } else {
+        cell.removeAttribute("tabindex");
+      }
+
+      cell.addEventListener("mouseenter", () => {
+        if (cell.dataset.truncated === "true") {
+          showFloatTooltip(cell);
+        }
+      });
+      cell.addEventListener("mouseleave", hideUrlTooltip);
+      cell.addEventListener("contextmenu", hideUrlTooltip);
+      cell.addEventListener("focus", () => {
+        if (cell.dataset.truncated === "true") {
+          showFloatTooltip(cell);
+        }
+      });
+      cell.addEventListener("blur", hideUrlTooltip);
+    }
+
+    container.querySelector(".table-wrap")?.addEventListener("scroll", hideUrlTooltip, {
+      passive: true,
+    });
+  };
+
+  requestAnimationFrame(bindCells);
 }
 
 function positionUrlTooltip(anchor, floater) {
@@ -562,6 +666,7 @@ function closeContextMenu() {
 }
 
 function openDbContextMenu(x, y, rowContext) {
+  hideUrlTooltip();
   closeContextMenu();
   closeServiceContextMenu();
   state.contextDbRow = rowContext;
@@ -1098,6 +1203,45 @@ async function toggleService(name) {
   }
 }
 
+let welcomeLeaving = false;
+
+function enterConsole(panel) {
+  if (state.consoleEntered || welcomeLeaving) {
+    return;
+  }
+  if (panel !== "registry" && panel !== "relay") {
+    return;
+  }
+
+  welcomeLeaving = true;
+  el.welcomeCards.forEach((card) => {
+    const selected = card.dataset.panel === panel;
+    card.classList.toggle("welcome-card--selected", selected);
+    card.disabled = true;
+  });
+  el.welcomeScreen.classList.add("welcome-screen--leaving");
+
+  window.setTimeout(() => {
+    el.welcomeScreen.classList.add("hidden");
+    el.appLayout.classList.remove("hidden");
+    el.appLayout.classList.add("layout--entering");
+    state.consoleEntered = true;
+    welcomeLeaving = false;
+    switchPanel(panel);
+    window.setTimeout(() => {
+      el.appLayout.classList.remove("layout--entering");
+    }, 450);
+  }, WELCOME_LEAVE_MS);
+}
+
+function initWelcomeScreen() {
+  el.welcomeCards.forEach((card) => {
+    card.addEventListener("click", () => {
+      enterConsole(card.dataset.panel);
+    });
+  });
+}
+
 function switchPanel(name) {
   if (isDatabaseView()) {
     closeDatabaseView();
@@ -1311,6 +1455,8 @@ async function scanServices() {
 
 async function bootstrap() {
   initBanners();
+  initWelcomeScreen();
+  state.consoleEntered = false;
   state.panel = "registry";
   state.view = "main";
   el.navItems.forEach((btn) => {
@@ -1323,7 +1469,6 @@ async function bootstrap() {
 
   setServicesScanning();
   await scanServices();
-  await refreshActivePanel();
   setInterval(loadServiceStatus, 5000);
   document.querySelector(".main")?.addEventListener("scroll", hideUrlTooltip, { passive: true });
 }
