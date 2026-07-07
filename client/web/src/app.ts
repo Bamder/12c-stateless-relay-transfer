@@ -101,6 +101,7 @@ let credentialDisplay: CredentialSlotDisplay | null = null;
 let receiveCredentialInput: ReceiveCredentialInput | null = null;
 let receivedFile: { fileName: string; data: Uint8Array } | null = null;
 let receiveDownloading = false;
+let sendInProgress = false;
 
 type ReceiveDownloadState = 'idle' | 'ready' | 'downloading' | 'done';
 
@@ -239,13 +240,20 @@ function showUploadStamp(): void {
   el.sendFileDropzone.classList.add('is-uploaded');
 }
 
+function updateSendControls(): void {
+  el.sendBtn.disabled = sendInProgress || !selectedFile;
+  el.sendFileInput.disabled = sendInProgress;
+  el.sendFileDropzone.classList.toggle('is-disabled', sendInProgress);
+  el.sendFileDropzone.toggleAttribute('aria-disabled', sendInProgress);
+}
+
 function updateSendFilePicker(): void {
   if (!selectedFile) {
     el.sendFileDropzone.classList.remove('has-file');
     el.sendFileEmpty.classList.remove('hidden');
     el.sendFileSelected.classList.add('hidden');
-    el.sendBtn.disabled = true;
     clearUploadStamp();
+    updateSendControls();
     return;
   }
 
@@ -256,7 +264,7 @@ function updateSendFilePicker(): void {
   renderFileIconForFile(el.sendFileIcon, selectedFile);
   el.sendFileName.textContent = selectedFile.name;
   el.sendFileSize.textContent = formatBytes(selectedFile.size);
-  el.sendBtn.disabled = false;
+  updateSendControls();
 }
 
 function resetSendProgress(): void {
@@ -291,8 +299,9 @@ async function handleSend(): Promise<void> {
     throw new Error('credential display not initialized');
   }
 
-  el.sendBtn.disabled = true;
   el.copyCredentialBtn.disabled = true;
+  sendInProgress = true;
+  updateSendControls();
   display.startBreathing();
 
   const bytesPromise = selectedFile
@@ -360,7 +369,8 @@ async function handleSend(): Promise<void> {
       display.reset();
     }
   } finally {
-    el.sendBtn.disabled = !selectedFile;
+    sendInProgress = false;
+    updateSendControls();
   }
 }
 
@@ -632,6 +642,9 @@ function bindEvents(): void {
   });
 
   el.sendFileInput.addEventListener('change', () => {
+    if (sendInProgress) {
+      return;
+    }
     selectedFile = el.sendFileInput.files?.[0] ?? null;
     updateSendFilePicker();
     resetSendPanel();
@@ -640,6 +653,9 @@ function bindEvents(): void {
   });
 
   el.sendBtn.addEventListener('click', () => {
+    if (sendInProgress) {
+      return;
+    }
     void handleSend();
   });
 

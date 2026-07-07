@@ -23,25 +23,38 @@ void throw_js_error(const std::string& message) {
     val::global("Error").new_(message).throw_();
 }
 
-void ensure_crypto_ready() {
-    static bool ready = false;
-    if (ready) {
+void ensure_openssl_initialized() {
+    static bool initialized = false;
+    if (initialized) {
         return;
     }
 
     OPENSSL_init_crypto(OPENSSL_INIT_LOAD_CRYPTO_STRINGS, nullptr);
+    initialized = true;
+}
 
+void reseed_openssl_from_browser() {
     const val crypto = val::global("crypto");
-    if (!crypto.isUndefined() && !crypto["getRandomValues"].isUndefined()) {
-        constexpr int kSeedBytes = 256;
-        Bytes seed(kSeedBytes);
-        val js_seed = val::global("Uint8Array").new_(kSeedBytes);
-        crypto.call<void>("getRandomValues", js_seed);
-        val(typed_memory_view(kSeedBytes, seed.data())).call<void>("set", js_seed);
-        RAND_seed(seed.data(), kSeedBytes);
+    if (crypto.isUndefined() || crypto["getRandomValues"].isUndefined()) {
+        throw_js_error(
+            "crypto.getRandomValues is unavailable; use HTTPS or localhost");
     }
 
-    ready = true;
+    constexpr int kSeedBytes = 256;
+    Bytes seed(kSeedBytes);
+    val js_seed = val::global("Uint8Array").new_(kSeedBytes);
+    crypto.call<void>("getRandomValues", js_seed);
+    val(typed_memory_view(kSeedBytes, seed.data())).call<void>("set", js_seed);
+    RAND_seed(seed.data(), kSeedBytes);
+
+    if (RAND_status() != 1) {
+        throw_js_error("OpenSSL RNG failed to accept browser entropy");
+    }
+}
+
+void ensure_crypto_ready() {
+    ensure_openssl_initialized();
+    reseed_openssl_from_browser();
 }
 
 Bytes val_to_bytes(const val& js_array) {

@@ -1,15 +1,21 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-  一键构建 Client：npm install → WASM（如需）→ copy:wasm → 可选生产打包。
+  一键构建 Client：npm install → build-ts → build-wasm（如需）→ copy:wasm → 可选生产打包。
 
 .DESCRIPTION
   推荐入口脚本。首次克隆仓库后在本目录执行即可，无需手动切换多个子目录。
+
+  子步骤可单独执行：
+    .\build-ts.ps1                 # 仅编译 transfer / app TypeScript
+    npm run build:wasm             # 仅编译 WASM（core/twelve_c_wasm）
 
   典型用法：
     .\build.ps1                    # 缺 WASM 时自动编译，并复制到 web/public/wasm/
     .\build.ps1 -SetupEmsdk        # 首次：安装 emsdk 后再构建 WASM
     .\build.ps1 -ForceWasm         # 强制重编 WASM
+    .\build.ps1 -SkipTs            # 跳过 TypeScript 编译
+    .\build.ps1 -SkipWasm          # 跳过 WASM 编译
     .\build.ps1 -Production        # 额外执行 vite build → web/dist/
     .\start.ps1                    # 构建后启动开发服务器
 
@@ -19,8 +25,11 @@
 .PARAMETER EmsdkRoot
   emsdk 安装根目录；传给 setup-emsdk / build-wasm。未指定时使用环境变量 EMSDK 或脚本内自动探测。
 
+.PARAMETER SkipTs
+  跳过 TypeScript 编译（须已有 transfer / app 的 dist/ 产物）。
+
 .PARAMETER SkipWasm
-  跳过 WASM 编译，仅 npm install + copy:wasm（须已有 transfer/src/wasm/pkg 产物）。
+  跳过 WASM 编译，仅 copy:wasm（须已有 transfer/src/wasm/pkg 产物）。
 
 .PARAMETER ForceWasm
   即使 pkg 中已有 .wasm 也强制重新编译。
@@ -39,6 +48,7 @@
 param(
     [switch]$SetupEmsdk,
     [string]$EmsdkRoot = $env:EMSDK,
+    [switch]$SkipTs,
     [switch]$SkipWasm,
     [switch]$ForceWasm,
     [switch]$Production
@@ -62,6 +72,12 @@ if (-not (Test-Path (Join-Path $ClientRoot "node_modules"))) {
     npm install
 } else {
     Write-Host 'node_modules 已存在，跳过 npm install'
+}
+
+if (-not $SkipTs) {
+    & (Join-Path $ClientRoot "build-ts.ps1")
+} else {
+    Write-Host '已跳过 TypeScript 编译 (-SkipTs)'
 }
 
 if ($SetupEmsdk) {
