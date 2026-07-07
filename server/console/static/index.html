@@ -7,7 +7,50 @@
   <link rel="stylesheet" href="/assets/styles.css" />
 </head>
 <body>
-  <div class="layout">
+  <div id="welcome-screen" class="welcome-screen">
+    <header class="welcome-header">
+      <div class="welcome-brand">12C Stateless Relay Transfer Console</div>
+      <p class="welcome-tagline">选择要管理的服务</p>
+    </header>
+
+    <div class="welcome-stage">
+      <div class="welcome-divider" aria-hidden="true"></div>
+      <div class="welcome-cards">
+        <button type="button" class="welcome-card welcome-card--registry" data-panel="registry">
+          <span class="welcome-card-icon" aria-hidden="true">
+            <svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="24" cy="24" r="6" />
+              <circle cx="24" cy="8" r="3.5" />
+              <circle cx="40" cy="32" r="3.5" />
+              <circle cx="8" cy="32" r="3.5" />
+              <path d="M24 14v4M30.5 27l3 1.7M17.5 27l-3 1.7" />
+            </svg>
+          </span>
+          <span class="welcome-card-title">Registry</span>
+          <span class="welcome-card-desc">注册服务器</span>
+          <span class="welcome-card-hint">管理 Relay 节点、Allowlist 与注册审批</span>
+        </button>
+
+        <button type="button" class="welcome-card welcome-card--relay" data-panel="relay">
+          <span class="welcome-card-icon" aria-hidden="true">
+            <svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="8" y="10" width="32" height="28" rx="4" />
+              <path d="M8 20h32" />
+              <circle cx="14" cy="15" r="1.5" fill="currentColor" stroke="none" />
+              <circle cx="20" cy="15" r="1.5" fill="currentColor" stroke="none" />
+              <rect x="14" y="26" width="8" height="6" rx="1" />
+              <rect x="26" y="26" width="8" height="6" rx="1" />
+            </svg>
+          </span>
+          <span class="welcome-card-title">Relay</span>
+          <span class="welcome-card-desc">中继服务器</span>
+          <span class="welcome-card-hint">块存储、运行状态与注册申请</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div id="app-layout" class="layout hidden">
     <aside class="sidebar">
       <div class="brand">12C Console</div>
       <nav class="nav">
@@ -198,7 +241,7 @@
         <input type="checkbox" name="enabled" checked />
         启用（在 Allowlist 中）
       </label>
-      <div class="dialog-actions">
+      <div class="dialog-actions dialog-actions-split">
         <button type="button" value="cancel" class="ghost-btn">取消</button>
         <button type="submit" value="confirm" class="primary-btn">保存</button>
       </div>
