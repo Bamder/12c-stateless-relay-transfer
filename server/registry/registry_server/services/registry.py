@@ -55,6 +55,18 @@ class ResolveRouteResult:
 
 
 @dataclass(frozen=True)
+class ReserveUploadOutcome:
+    routes: list[ResolveRouteResult]
+    granted_ttl_seconds: int
+    requested_ttl_seconds: int
+    degraded: bool
+    stripe_count: int
+    replica_factor: int
+    ideal_relay_count: int
+    actual_relay_count: int
+
+
+@dataclass(frozen=True)
 class VerifyOverwriteResult:
     block_hash: str
     block_auth_key_id: str
@@ -145,9 +157,9 @@ class RegistryService:
         entries: list[tuple[str, str]],
         *,
         ttl_seconds: int | None = None,
-    ) -> list[ResolveRouteResult]:
+    ) -> ReserveUploadOutcome:
         try:
-            routes = await self._repository.lock_tokens_with_block_hashes(
+            outcome = await self._repository.lock_tokens_with_block_hashes(
                 entries,
                 ttl_seconds=ttl_seconds,
             )
@@ -164,13 +176,23 @@ class RegistryService:
         except RuntimeError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
 
-        return [
+        routes = [
             ResolveRouteResult(
                 token=route.token,
                 targets=route.targets,
             )
-            for route in routes
+            for route in outcome.routes
         ]
+        return ReserveUploadOutcome(
+            routes=routes,
+            granted_ttl_seconds=outcome.granted_ttl_seconds,
+            requested_ttl_seconds=outcome.requested_ttl_seconds,
+            degraded=outcome.degraded,
+            stripe_count=outcome.stripe_count,
+            replica_factor=outcome.replica_factor,
+            ideal_relay_count=outcome.ideal_relay_count,
+            actual_relay_count=outcome.actual_relay_count,
+        )
 
     async def _validate_relay_placement(
         self,
@@ -545,6 +567,8 @@ class RegistryService:
         stored_blocks: int,
         max_blocks: int,
         storage_rate: float,
+        block_max_age_seconds: int,
+        block_sweep_interval_seconds: int,
         registry_api_key_id: str | None,
         registry_api_key: str | None,
         relay_public_key_pem: str | None,
@@ -568,6 +592,8 @@ class RegistryService:
             stored_blocks=stored_blocks,
             max_blocks=max_blocks,
             storage_rate=storage_rate,
+            block_max_age_seconds=block_max_age_seconds,
+            block_sweep_interval_seconds=block_sweep_interval_seconds,
         )
 
         if registry_api_key_id is None or registry_api_key is None:

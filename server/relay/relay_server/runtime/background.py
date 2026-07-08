@@ -31,7 +31,7 @@ async def run_startup_auto_registration(
             result.get("status"),
         )
         if identity.is_assigned:
-            await report_assigned_heartbeat(identity, blocks, registry)
+            await report_assigned_heartbeat(identity, blocks, registry, settings)
         record_registry_success()
     except Exception as exc:
         record_registry_failure(exc)
@@ -59,12 +59,15 @@ async def report_assigned_heartbeat(
     identity: RelayIdentityManager,
     blocks: BlockService,
     registry: RegistryClient,
+    settings: RelayServerConfig,
 ) -> None:
     stats = await blocks.stats()
     result = await registry.report_heartbeat(
         stored_blocks=stats.stored_blocks,
         max_blocks=stats.max_blocks,
         storage_rate=stats.storage_rate,
+        block_max_age_seconds=settings.block_max_age_seconds,
+        block_sweep_interval_seconds=settings.block_sweep_interval_seconds,
     )
     if result.get("notAllowlisted"):
         logger.info(
@@ -141,7 +144,7 @@ async def relay_registry_loop(
         try:
             await sync_relay_assignment_from_registry(identity, registry)
             if identity.is_assigned:
-                await report_assigned_heartbeat(identity, blocks, registry)
+                await report_assigned_heartbeat(identity, blocks, registry, settings)
             record_registry_success()
         except Exception as exc:
             record_registry_failure(exc)

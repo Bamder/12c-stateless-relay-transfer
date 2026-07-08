@@ -124,7 +124,7 @@ def create_admin_router(
             ) from exc
         record_registry_success()
         if identity.is_assigned:
-            await report_assigned_heartbeat(identity, blocks, registry)
+            await report_assigned_heartbeat(identity, blocks, registry, config)
         return result
 
     return router

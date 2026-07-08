@@ -3,9 +3,15 @@
   "port": 8080,
   "databasePath": "./data/registry.db",
   "registryApiKeyInitialUses": 100,
-  "stripeTargetRelays": 3,
-  "maxFileReplicaCount": 1,
-  "maxReplicasPerBlock": 2,
+  "placementPolicy": {
+    "stripeTargetRelays": 3,
+    "maxFileReplicaCount": 1,
+    "maxReplicasPerBlock": 2,
+    "minGrantTtlSeconds": 3600,
+    "clockSkewSeconds": 60,
+    "maxRequestedTtlSeconds": 86400,
+    "ttlDegradeStepDivisor": 4
+  },
   "relayHeartbeatStaleSeconds": 120,
   "heartbeatUrlPolicy": "sync_if_unset",
   "allowlist": []

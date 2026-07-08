@@ -125,6 +125,8 @@ class RegistryClientProxyTests(unittest.IsolatedAsyncioTestCase):
             stored_blocks=0,
             max_blocks=1,
             storage_rate=0.0,
+            block_max_age_seconds=86400,
+            block_sweep_interval_seconds=3600,
         )
         self.assertEqual(result, {"notAssigned": True})
 

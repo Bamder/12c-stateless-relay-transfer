@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from registry_server.api.app import create_app
 from registry_server.config import RegistryServerConfig
+from tests.registry_fixtures import DEFAULT_TEST_PLACEMENT_POLICY
 
 
 def _empty_allowlist_config(database_path: Path) -> RegistryServerConfig:
@@ -21,9 +22,7 @@ def _empty_allowlist_config(database_path: Path) -> RegistryServerConfig:
             base64.urlsafe_b64encode(b"0" * 32),
         ),
         allowlist=(),
-        stripe_target_relays=3,
-        max_file_replica_count=1,
-        max_replicas_per_block=2,
+        placement_policy=DEFAULT_TEST_PLACEMENT_POLICY,
         relay_heartbeat_stale_seconds=3600,
         admin_api_key="test-admin-key",
     )

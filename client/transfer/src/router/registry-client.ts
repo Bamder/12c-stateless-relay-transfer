@@ -46,6 +46,24 @@ export interface ReserveUploadBlocksOptions {
   ttlSeconds?: number;
 }
 
+export interface UploadPlacementPlan {
+  stripeCount: number;
+  replicaFactor: number;
+  relayCount: number;
+  idealRelayCount: number;
+}
+
+/** reserve-tokens 返回的路由与 TTL 分配元数据 */
+export interface ReserveUploadBlocksResult {
+  routes: RelayRegistryMap;
+  grantedTtlSeconds: number;
+  requestedTtlSeconds: number;
+  degraded: boolean;
+  placementPlan?: UploadPlacementPlan;
+}
+
+export type UploadReservationMeta = Omit<ReserveUploadBlocksResult, 'routes'>;
+
 /**
  * 向注册服务器查询 token 当前绑定的中继地址（下载）。
  * 上传路由见 reserveUploadBlocks。
@@ -57,7 +75,7 @@ export interface RegistryClient {
   reserveUploadBlocks(
     entries: readonly BlockHashEntry[],
     options?: ReserveUploadBlocksOptions,
-  ): Promise<RelayRegistryMap>;
+  ): Promise<ReserveUploadBlocksResult>;
 
   /** replica 补传放弃时，通知 Registry 删除对应 replica placement */
   abandonReplicaPlacements(
@@ -182,6 +200,74 @@ function defaultParseResponse(
   return map;
 }
 
+function parsePlacementPlan(value: unknown): UploadPlacementPlan | undefined {
+  if (typeof value !== 'object' || value === null) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const stripeCount = record.stripeCount;
+  const replicaFactor = record.replicaFactor;
+  const relayCount = record.relayCount;
+  const idealRelayCount = record.idealRelayCount;
+  if (
+    typeof stripeCount !== 'number' ||
+    typeof replicaFactor !== 'number' ||
+    typeof relayCount !== 'number' ||
+    typeof idealRelayCount !== 'number'
+  ) {
+    return undefined;
+  }
+  return {
+    stripeCount,
+    replicaFactor,
+    relayCount,
+    idealRelayCount,
+  };
+}
+
+export function parseReserveUploadResponse(
+  body: unknown,
+  tokens: readonly string[],
+  fallbackRequestedTtlSeconds?: number,
+): ReserveUploadBlocksResult {
+  const routes = defaultParseResponse(body, tokens);
+  if (typeof body !== 'object' || body === null) {
+    const requested = fallbackRequestedTtlSeconds ?? 0;
+    return {
+      routes,
+      grantedTtlSeconds: requested,
+      requestedTtlSeconds: requested,
+      degraded: false,
+    };
+  }
+
+  const root = body as Record<string, unknown>;
+  const requestedFromBody =
+    typeof root.requestedTtlSeconds === 'number'
+      ? root.requestedTtlSeconds
+      : undefined;
+  const grantedFromBody =
+    typeof root.grantedTtlSeconds === 'number' ? root.grantedTtlSeconds : undefined;
+  const requested =
+    requestedFromBody ?? fallbackRequestedTtlSeconds ?? grantedFromBody ?? 0;
+  const granted = grantedFromBody ?? requested;
+  const degraded =
+    root.degraded === true ||
+    granted < requested ||
+    (() => {
+      const plan = parsePlacementPlan(root.placementPlan);
+      return plan !== undefined && plan.relayCount < plan.idealRelayCount;
+    })();
+
+  return {
+    routes,
+    grantedTtlSeconds: granted,
+    requestedTtlSeconds: requested,
+    degraded,
+    placementPlan: parsePlacementPlan(root.placementPlan),
+  };
+}
+
 /** 单 token 下载查询（内部仍走批量 API） */
 export async function lookupRelay(
   client: RegistryClient,
@@ -255,9 +341,15 @@ export class HttpRegistryClient implements RegistryClient {
   async reserveUploadBlocks(
     entries: readonly BlockHashEntry[],
     options: ReserveUploadBlocksOptions = {},
-  ): Promise<RelayRegistryMap> {
+  ): Promise<ReserveUploadBlocksResult> {
     if (entries.length === 0) {
-      return new Map();
+      const requested = options.ttlSeconds ?? 0;
+      return {
+        routes: new Map(),
+        grantedTtlSeconds: requested,
+        requestedTtlSeconds: requested,
+        degraded: false,
+      };
     }
 
     const unique = new Map<string, string>();
@@ -297,7 +389,7 @@ export class HttpRegistryClient implements RegistryClient {
     }
 
     const body: unknown = await response.json();
-    return this.parseResponse(body, [...unique.keys()]);
+    return parseReserveUploadResponse(body, [...unique.keys()], options.ttlSeconds);
   }
 
   async abandonReplicaPlacements(
@@ -441,7 +533,7 @@ export class CoalescingRegistryClient implements RegistryClient {
   reserveUploadBlocks(
     entries: readonly BlockHashEntry[],
     options?: ReserveUploadBlocksOptions,
-  ): Promise<RelayRegistryMap> {
+  ): Promise<ReserveUploadBlocksResult> {
     return this.inner.reserveUploadBlocks(entries, options);
   }
 

@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from registry_server.api.app import create_app
 from registry_server.config import AllowlistEntry, RegistryServerConfig
+from tests.registry_fixtures import DEFAULT_TEST_PLACEMENT_POLICY
 
 
 def _test_config(database_path: Path, *, admin_api_key: str | None = "test-admin-key") -> RegistryServerConfig:
@@ -24,9 +25,7 @@ def _test_config(database_path: Path, *, admin_api_key: str | None = "test-admin
             AllowlistEntry("relay-a", "http://a.test"),
             AllowlistEntry("relay-b", "http://b.test"),
         ),
-        stripe_target_relays=3,
-        max_file_replica_count=1,
-        max_replicas_per_block=2,
+        placement_policy=DEFAULT_TEST_PLACEMENT_POLICY,
         relay_heartbeat_stale_seconds=3600,
         admin_api_key=admin_api_key,
     )

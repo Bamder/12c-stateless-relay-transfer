@@ -8,6 +8,8 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from .scheduling.policy import PlacementPolicy
+
 
 def _import_local_secrets():
     server_root = Path(__file__).resolve().parents[2]
@@ -44,9 +46,7 @@ class RegistryServerConfig:
     registry_api_key_initial_uses: int
     block_auth_master_key: bytes
     allowlist: tuple[AllowlistEntry, ...]
-    stripe_target_relays: int
-    max_file_replica_count: int
-    max_replicas_per_block: int
+    placement_policy: PlacementPolicy
     relay_heartbeat_stale_seconds: int
     admin_api_key: str | None = None
     heartbeat_url_policy: str = HEARTBEAT_URL_POLICY_SYNC_IF_UNSET
@@ -76,21 +76,7 @@ class RegistryServerConfig:
         block_auth_master_key = load_block_auth_master_key(
             value.get("blockAuthMasterKey"),
         )
-        stripe_target_relays = _require_int(
-            value.get("stripeTargetRelays"),
-            "stripeTargetRelays",
-            default=3,
-        )
-        max_file_replica_count = _require_int_nonneg(
-            value.get("maxFileReplicaCount"),
-            "maxFileReplicaCount",
-            default=1,
-        )
-        max_replicas_per_block = _require_int(
-            value.get("maxReplicasPerBlock"),
-            "maxReplicasPerBlock",
-            default=2,
-        )
+        placement_policy = parse_placement_policy(value)
         relay_heartbeat_stale_seconds = _require_int(
             value.get("relayHeartbeatStaleSeconds"),
             "relayHeartbeatStaleSeconds",
@@ -106,13 +92,67 @@ class RegistryServerConfig:
             registry_api_key_initial_uses=registry_api_key_initial_uses,
             block_auth_master_key=block_auth_master_key,
             allowlist=allowlist,
-            stripe_target_relays=stripe_target_relays,
-            max_file_replica_count=max_file_replica_count,
-            max_replicas_per_block=max_replicas_per_block,
+            placement_policy=placement_policy,
             relay_heartbeat_stale_seconds=relay_heartbeat_stale_seconds,
             admin_api_key=admin_api_key,
             heartbeat_url_policy=heartbeat_url_policy,
         )
+
+
+def parse_placement_policy(root: dict) -> PlacementPolicy:
+    nested = root.get("placementPolicy")
+    if nested is not None and not isinstance(nested, dict):
+        raise ValueError("placementPolicy must be an object")
+
+    def field(name: str) -> object:
+        if isinstance(nested, dict) and name in nested:
+            return nested.get(name)
+        return root.get(name)
+
+    stripe_target_relays = _require_int(
+        field("stripeTargetRelays"),
+        "stripeTargetRelays",
+        default=3,
+    )
+    max_file_replica_count = _require_int_nonneg(
+        field("maxFileReplicaCount"),
+        "maxFileReplicaCount",
+        default=1,
+    )
+    max_replicas_per_block = _require_int(
+        field("maxReplicasPerBlock"),
+        "maxReplicasPerBlock",
+        default=2,
+    )
+    min_grant_ttl_seconds = _require_int(
+        field("minGrantTtlSeconds"),
+        "minGrantTtlSeconds",
+        default=3600,
+    )
+    clock_skew_seconds = _require_int(
+        field("clockSkewSeconds"),
+        "clockSkewSeconds",
+        default=60,
+    )
+    max_requested_ttl_seconds = _require_int(
+        field("maxRequestedTtlSeconds"),
+        "maxRequestedTtlSeconds",
+        default=86400,
+    )
+    ttl_degrade_step_divisor = _require_int(
+        field("ttlDegradeStepDivisor"),
+        "ttlDegradeStepDivisor",
+        default=4,
+    )
+    return PlacementPolicy(
+        stripe_target_relays=stripe_target_relays,
+        max_file_replica_count=max_file_replica_count,
+        max_replicas_per_block=max_replicas_per_block,
+        min_grant_ttl_seconds=min_grant_ttl_seconds,
+        clock_skew_seconds=clock_skew_seconds,
+        max_requested_ttl_seconds=max_requested_ttl_seconds,
+        ttl_degrade_step_divisor=ttl_degrade_step_divisor,
+    )
 
 
 def _parse_allowlist(value: object) -> tuple[AllowlistEntry, ...]:
@@ -236,9 +276,7 @@ def _load_from_path(path: Path) -> RegistryServerConfig:
         registry_api_key_initial_uses=config.registry_api_key_initial_uses,
         block_auth_master_key=config.block_auth_master_key,
         allowlist=config.allowlist,
-        stripe_target_relays=config.stripe_target_relays,
-        max_file_replica_count=config.max_file_replica_count,
-        max_replicas_per_block=config.max_replicas_per_block,
+        placement_policy=config.placement_policy,
         relay_heartbeat_stale_seconds=config.relay_heartbeat_stale_seconds,
         admin_api_key=config.admin_api_key,
         heartbeat_url_policy=config.heartbeat_url_policy,

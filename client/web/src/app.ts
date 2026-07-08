@@ -14,6 +14,7 @@ import {
   resolveRegistryBaseUrl,
   uploadPrepared,
   type OccupiedTokenInfo,
+  type UploadReservationMeta,
 } from '@stateless-relay/transfer';
 import type { ClientRuntime } from './runtime.js';
 import {
@@ -283,6 +284,27 @@ function resetSendPanel(): void {
   clearUploadStamp();
 }
 
+function formatUploadReservationDegradedMessage(
+  reservation: UploadReservationMeta,
+): string {
+  const parts: string[] = [];
+  if (reservation.grantedTtlSeconds < reservation.requestedTtlSeconds) {
+    parts.push(
+      `上传有效期已由 ${formatDurationLabel(reservation.requestedTtlSeconds)} 调整为 ${formatDurationLabel(reservation.grantedTtlSeconds)}`,
+    );
+  }
+  const plan = reservation.placementPlan;
+  if (plan && plan.relayCount < plan.idealRelayCount) {
+    parts.push(
+      `备份/分散布局已降级（${plan.relayCount}/${plan.idealRelayCount} 台 Relay）`,
+    );
+  }
+  if (parts.length === 0) {
+    return 'Registry 已降级上传分配策略（当前 Relay 存储能力或冗余不足）。';
+  }
+  return `${parts.join('；')}（当前 Relay 存储能力或冗余不足）。`;
+}
+
 async function handleSend(): Promise<void> {
   clearBanner(el.sendError);
   clearBanner(el.sendInfo);
@@ -327,7 +349,7 @@ async function handleSend(): Promise<void> {
         await display.revealSequential(credential);
         el.copyCredentialBtn.disabled = false;
 
-        const { replicaSync } = await uploadPrepared(
+        const { replicaSync, reservation } = await uploadPrepared(
           uploads,
           client.stack.router,
           client.stack.uploadClient,
@@ -341,6 +363,13 @@ async function handleSend(): Promise<void> {
             el.sendProgressText.textContent = `${progress.completed} / ${progress.total}`;
           },
         );
+
+        if (reservation?.degraded) {
+          showBanner(
+            el.sendInfo,
+            formatUploadReservationDegradedMessage(reservation),
+          );
+        }
 
         showUploadStamp();
         void replicaSync?.catch(() => {
