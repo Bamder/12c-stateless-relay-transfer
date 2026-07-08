@@ -7,6 +7,7 @@ from ..config import RelayServerConfig
 from ..domain.blocks import BlockService
 from ..identity import RelayIdentityManager
 from ..registry.client import RegistryClient
+from ..registry.connectivity import record_registry_failure, record_registry_success
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +32,9 @@ async def run_startup_auto_registration(
         )
         if identity.is_assigned:
             await report_assigned_heartbeat(identity, blocks, registry)
-    except Exception:
+        record_registry_success()
+    except Exception as exc:
+        record_registry_failure(exc)
         logger.exception(
             "startup auto registration failed install=%s",
             identity.install_id,
@@ -139,7 +142,9 @@ async def relay_registry_loop(
             await sync_relay_assignment_from_registry(identity, registry)
             if identity.is_assigned:
                 await report_assigned_heartbeat(identity, blocks, registry)
-        except Exception:
+            record_registry_success()
+        except Exception as exc:
+            record_registry_failure(exc)
             logger.exception("relay registry sync failed install=%s", identity.install_id)
         await asyncio.sleep(settings.heartbeat_interval_seconds)
 

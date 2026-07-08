@@ -168,7 +168,7 @@
         <div id="relay-error" class="banner error hidden"></div>
 
         <div id="relay-main-view" class="panel-main-view">
-          <div id="relay-overview" class="overview-cards"></div>
+          <div id="relay-overview" class="relay-overview"></div>
         </div>
 
         <div id="relay-db-view" class="panel-db-view hidden">
@@ -189,7 +189,9 @@
   </div>
 
   <div id="service-context-menu" class="context-menu hidden">
-    <button type="button" data-action="start-detached">启动独立进程</button>
+    <button type="button" data-action="start-detached" data-menu-when="stopped">启动独立进程</button>
+    <button type="button" data-action="restart-managed" data-menu-when="running">重启（托管）</button>
+    <button type="button" data-action="restart-detached" data-menu-when="running">重启（独立进程）</button>
   </div>
 
   <div id="context-menu" class="context-menu hidden">
@@ -216,6 +218,30 @@
       <div class="dialog-actions dialog-actions-split">
         <button type="button" value="cancel" class="ghost-btn">取消</button>
         <button type="submit" value="confirm" class="primary-btn">提交申请</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="relay-public-url-dialog" class="dialog">
+    <form method="dialog" id="relay-public-url-form">
+      <h3>配置 Public URL</h3>
+      <div id="relay-public-url-error" class="banner error hidden dialog-error"></div>
+      <p class="dialog-hint">
+        对外服务根地址。客户端与 Registry 通过此 URL 访问块存储。
+      </p>
+      <label>
+        Public URL
+        <input name="publicBaseUrl" required placeholder="https://relay.example.com" />
+      </label>
+      <button type="button" id="fill-local-relay-url-btn" class="ghost-btn dialog-fill-btn">
+        填充本地监听地址
+      </button>
+      <p class="dialog-note">
+        保存后需重启 Relay 才会在运行进程中生效。若已分配 Relay ID，将尝试同步更新 Registry Allowlist。
+      </p>
+      <div class="dialog-actions dialog-actions-split">
+        <button type="button" value="cancel" class="ghost-btn">取消</button>
+        <button type="submit" value="confirm" class="primary-btn">保存</button>
       </div>
     </form>
   </dialog>
@@ -249,6 +275,21 @@
   </dialog>
 
   <div id="url-tooltip-float" class="url-tooltip-float hidden" role="tooltip"></div>
+
+  <button
+    type="button"
+    id="refresh-fab"
+    class="refresh-fab icon-btn refresh-icon-btn"
+    aria-label="刷新"
+    title="刷新"
+    aria-hidden="true"
+  >
+    <svg class="refresh-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M1 4v6h6" />
+      <path d="M23 20v-6h-6" />
+      <path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15" />
+    </svg>
+  </button>
 
   <script src="/assets/app.js" type="module"></script>
 </body>

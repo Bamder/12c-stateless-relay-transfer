@@ -27,7 +27,9 @@ from ..db_admin import (
     resolve_database_path,
 )
 from ..relay_config import (
+    read_relay_public_base_url,
     read_relay_registry_url,
+    write_relay_public_base_url,
     write_relay_registry_url,
 )
 from ..runtime.process_manager import ProcessManager, ServiceLaunchConfig
@@ -179,6 +181,41 @@ def create_app(config: ConsoleServerConfig | None = None) -> FastAPI:
         saved = write_relay_registry_url(settings.relay_config_path, registry_url)
         return {"registryUrl": saved}
 
+    @app.get("/api/config/relay-public-url")
+    async def relay_public_url_config() -> object:
+        public_base_url, port = read_relay_public_base_url(settings.relay_config_path)
+        return {
+            "publicBaseUrl": public_base_url,
+            "localListenUrl": f"http://127.0.0.1:{port}",
+        }
+
+    @app.put("/api/config/relay-public-url")
+    async def update_relay_public_url_config(request: Request) -> object:
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="request body must be a JSON object")
+        public_base_url = body.get("publicBaseUrl")
+        if not isinstance(public_base_url, str) or not public_base_url.strip():
+            raise HTTPException(status_code=400, detail="publicBaseUrl must be a non-empty string")
+        saved = write_relay_public_base_url(settings.relay_config_path, public_base_url)
+
+        allowlist_synced = False
+        relay_id = body.get("relayId")
+        if isinstance(relay_id, str) and relay_id.strip():
+            try:
+                response = await upstream.registry_admin(
+                    "PATCH",
+                    f"/api/admin/allowlist/{relay_id.strip()}",
+                    json_body={"relayBaseUrl": saved},
+                )
+                allowlist_synced = response.is_success
+            except HTTPException:
+                pass
+
+        return {
+            "publicBaseUrl": saved,
+            "allowlistSynced": allowlist_synced,
+        }
 
 
     @app.post("/api/services/registry/start")

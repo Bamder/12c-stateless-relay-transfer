@@ -8,6 +8,11 @@ from ...domain.blocks import BlockService
 from ...identity import RelayIdentityManager
 from ...persistence.repository import BlockRepository
 from ...registry.client import RegistryClient
+from ...registry.connectivity import (
+    record_registry_failure,
+    record_registry_success,
+    registry_connectivity_snapshot,
+)
 from ...runtime.background import report_assigned_heartbeat
 from ..admin_deps import require_admin_api_key
 
@@ -54,6 +59,8 @@ def create_admin_router(
             "storageRate": stats.storage_rate,
             "blockMaxAgeSeconds": config.block_max_age_seconds,
             "blockSweepIntervalSeconds": config.block_sweep_interval_seconds,
+            "heartbeatIntervalSeconds": config.heartbeat_interval_seconds,
+            **registry_connectivity_snapshot(),
         }
 
     @router.get("/identity")
@@ -104,15 +111,18 @@ def create_admin_router(
         try:
             result = await registry.submit_registration_request()
         except httpx.HTTPStatusError as exc:
+            record_registry_failure(exc)
             raise HTTPException(
                 status_code=exc.response.status_code,
                 detail=upstream_error_detail_from_response(exc.response),
             ) from exc
         except httpx.HTTPError as exc:
+            record_registry_failure(exc)
             raise HTTPException(
                 status_code=502,
                 detail=f"registry unreachable: {exc}",
             ) from exc
+        record_registry_success()
         if identity.is_assigned:
             await report_assigned_heartbeat(identity, blocks, registry)
         return result
