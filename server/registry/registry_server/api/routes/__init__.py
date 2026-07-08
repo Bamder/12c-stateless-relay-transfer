@@ -39,7 +39,7 @@ def create_relay_router(service: RegistryService) -> APIRouter:
         }
 
     @router.post("/reserve-tokens")
-    async def reserve_tokens(body: ReserveTokensRequest) -> dict[str, list[dict[str, object]]]:
+    async def reserve_tokens(body: ReserveTokensRequest) -> dict[str, object]:
         if not body.blocks:
             raise HTTPException(status_code=400, detail="blocks must not be empty")
         entries: list[tuple[str, str]] = []
@@ -49,7 +49,16 @@ def create_relay_router(service: RegistryService) -> APIRouter:
             entries.append((token, block_hash))
         routes = await service.reserve_upload_blocks(entries, ttl_seconds=body.ttlSeconds)
         return {
-            "routes": [serialize_route(route) for route in routes],
+            "grantedTtlSeconds": routes.granted_ttl_seconds,
+            "requestedTtlSeconds": routes.requested_ttl_seconds,
+            "degraded": routes.degraded,
+            "placementPlan": {
+                "stripeCount": routes.stripe_count,
+                "replicaFactor": routes.replica_factor,
+                "relayCount": routes.actual_relay_count,
+                "idealRelayCount": routes.ideal_relay_count,
+            },
+            "routes": [serialize_route(route) for route in routes.routes],
         }
 
     @router.post("/abandon-replica-placements")
@@ -105,6 +114,8 @@ def create_relay_router(service: RegistryService) -> APIRouter:
             stored_blocks=body.storedBlocks,
             max_blocks=body.maxBlocks,
             storage_rate=body.storageRate,
+            block_max_age_seconds=body.blockMaxAgeSeconds,
+            block_sweep_interval_seconds=body.blockSweepIntervalSeconds,
             registry_api_key_id=body.registryApiKeyId,
             registry_api_key=body.registryApiKey,
             relay_public_key_pem=body.relayPublicKeyPem,

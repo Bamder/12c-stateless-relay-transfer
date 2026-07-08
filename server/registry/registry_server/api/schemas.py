@@ -27,6 +27,8 @@ class HeartbeatRequest(BaseModel):
     storedBlocks: int = Field(ge=0)
     maxBlocks: int = Field(gt=0)
     storageRate: float = Field(ge=0.0, le=1.0)
+    blockMaxAgeSeconds: int = Field(default=86400, ge=1, le=86400)
+    blockSweepIntervalSeconds: int = Field(default=3600, ge=1, le=86400)
     registryApiKeyId: str | None = None
     registryApiKey: str | None = None
     relayPublicKeyPem: str | None = None

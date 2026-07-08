@@ -8,6 +8,7 @@ import pytest_asyncio
 
 from registry_server.config import AllowlistEntry, RegistryServerConfig
 from registry_server.persistence.repository import RegistryRepository, TokenOccupiedError, TokenReserveResult
+from tests.registry_fixtures import DEFAULT_TEST_PLACEMENT_POLICY
 
 
 def _test_config(database_path: Path) -> RegistryServerConfig:
@@ -26,9 +27,7 @@ def _test_config(database_path: Path) -> RegistryServerConfig:
             AllowlistEntry("relay-c", "http://c.test"),
             AllowlistEntry("relay-d", "http://d.test"),
         ),
-        stripe_target_relays=3,
-        max_file_replica_count=1,
-        max_replicas_per_block=2,
+        placement_policy=DEFAULT_TEST_PLACEMENT_POLICY,
         relay_heartbeat_stale_seconds=3600,
     )
 
@@ -69,7 +68,7 @@ async def test_lock_tokens_stripes_with_replicas_when_four_relays(
         ("token-1", "hash-1"),
         ("token-2", "hash-2"),
     ]
-    results = await repository.lock_tokens_with_block_hashes(entries)
+    results = (await repository.lock_tokens_with_block_hashes(entries)).routes
     assert len(results) == 3
     assert primary_url(results[0]) == "http://a.test"
     assert primary_url(results[1]) == "http://b.test"
@@ -82,7 +81,7 @@ async def test_lock_tokens_adds_replica_with_four_relays(
     repository: RegistryRepository,
 ) -> None:
     entries = [("token-0", "hash-0"), ("token-1", "hash-1")]
-    results = await repository.lock_tokens_with_block_hashes(entries)
+    results = (await repository.lock_tokens_with_block_hashes(entries)).routes
     assert len(results) == 2
     assert results[0].targets[0].relay_base_url == "http://a.test"
     assert results[0].targets[1].role == "replica"

@@ -35,6 +35,9 @@ export type {
   HttpRegistryClientOptions,
   BlockHashEntry,
   OccupiedTokenInfo,
+  ReserveUploadBlocksResult,
+  UploadPlacementPlan,
+  UploadReservationMeta,
 } from './router/registry-client.js';
 export {
   CoalescingRegistryClient,
@@ -42,6 +45,7 @@ export {
   isResolvableRegistryRecord,
   lookupRelay,
   primaryTarget,
+  parseReserveUploadResponse,
   RegistryTokenOccupiedError,
 } from './router/registry-client.js';
 export type { RelayEndpointMap } from './router/relay-router.js';

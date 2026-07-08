@@ -8,6 +8,7 @@ import pytest_asyncio
 
 from registry_server.config import AllowlistEntry, RegistryServerConfig
 from registry_server.persistence.repository import RegistryRepository
+from tests.registry_fixtures import DEFAULT_TEST_PLACEMENT_POLICY
 
 
 def _test_config(database_path: Path) -> RegistryServerConfig:
@@ -26,9 +27,7 @@ def _test_config(database_path: Path) -> RegistryServerConfig:
             AllowlistEntry("relay-c", "http://c.test"),
             AllowlistEntry("relay-d", "http://d.test"),
         ),
-        stripe_target_relays=3,
-        max_file_replica_count=1,
-        max_replicas_per_block=2,
+        placement_policy=DEFAULT_TEST_PLACEMENT_POLICY,
         relay_heartbeat_stale_seconds=3600,
     )
 

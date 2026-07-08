@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from registry_server.api.app import create_app
 from registry_server.config import AllowlistEntry, RegistryServerConfig
+from registry_server.scheduling.policy import PlacementPolicy
 
 TOKEN_PRESENT = "a" * 64
 TOKEN_MISSING = "b" * 64
@@ -25,9 +26,11 @@ def _config(database_path: Path) -> RegistryServerConfig:
             base64.urlsafe_b64encode(b"0" * 32),
         ),
         allowlist=(AllowlistEntry("relay-a", "http://relay-a.test"),),
-        stripe_target_relays=1,
-        max_file_replica_count=0,
-        max_replicas_per_block=0,
+        placement_policy=PlacementPolicy(
+            stripe_target_relays=1,
+            max_file_replica_count=0,
+            max_replicas_per_block=0,
+        ),
         relay_heartbeat_stale_seconds=3600,
     )
 

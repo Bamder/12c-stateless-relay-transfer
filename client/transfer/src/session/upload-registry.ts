@@ -1,7 +1,7 @@
 import type { UploadMap } from '../types.js';
 import type { BlockHashEntry } from '../protocol/block-hash.js';
 import { computeBlockHashSha256 } from '../protocol/block-hash.js';
-import type { RegistryClient } from '../router/registry-client.js';
+import type { RegistryClient, UploadReservationMeta } from '../router/registry-client.js';
 import {
   endpointsFromRegistryMap,
   replicaTargetsFromRegistryMap,
@@ -9,11 +9,12 @@ import {
 } from '../router/endpoints-from-registry.js';
 import type { RelayEndpointMap, RelayRouter } from '../router/relay-router.js';
 
-export type { ReplicaUploadTarget };
+export type { ReplicaUploadTarget, UploadReservationMeta };
 
 export interface UploadRoutePlan {
   primary: RelayEndpointMap;
   replicas: Map<string, ReplicaUploadTarget[]>;
+  reservation?: UploadReservationMeta;
 }
 
 export interface ResolveUploadEndpointsOptions {
@@ -56,12 +57,18 @@ export async function reserveAndRegisterUploadBlocks(
     });
   }
 
-  const routes = await registry.reserveUploadBlocks(entries, {
+  const reserveResult = await registry.reserveUploadBlocks(entries, {
     ttlSeconds: options.ttlSeconds,
   });
   return {
-    primary: endpointsFromRegistryMap(routes),
-    replicas: replicaTargetsFromRegistryMap(routes),
+    primary: endpointsFromRegistryMap(reserveResult.routes),
+    replicas: replicaTargetsFromRegistryMap(reserveResult.routes),
+    reservation: {
+      grantedTtlSeconds: reserveResult.grantedTtlSeconds,
+      requestedTtlSeconds: reserveResult.requestedTtlSeconds,
+      degraded: reserveResult.degraded,
+      placementPlan: reserveResult.placementPlan,
+    },
   };
 }
 

@@ -8,6 +8,8 @@ class HealthyRelay:
     relay_id: str
     relay_base_url: str
     storage_rate: float
+    block_max_age_seconds: int = 86400
+    block_sweep_interval_seconds: int = 3600
 
 
 @dataclass(frozen=True)

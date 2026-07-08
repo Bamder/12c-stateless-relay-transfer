@@ -38,22 +38,26 @@ def _settings(tmp_path: Path) -> RelayServerConfig:
 
 class BackgroundRegistryTests(unittest.IsolatedAsyncioTestCase):
     async def test_report_assigned_heartbeat_forwards_stats(self) -> None:
-        identity = MagicMock()
-        identity.relay_id = "relay-test"
-        blocks = MagicMock()
-        blocks.stats = AsyncMock(
-            return_value=MagicMock(stored_blocks=3, max_blocks=100, storage_rate=0.03),
-        )
-        registry = MagicMock()
-        registry.report_heartbeat = AsyncMock(return_value={"ok": True})
+        with tempfile.TemporaryDirectory() as tmp:
+            settings = _settings(Path(tmp))
+            identity = MagicMock()
+            identity.relay_id = "relay-test"
+            blocks = MagicMock()
+            blocks.stats = AsyncMock(
+                return_value=MagicMock(stored_blocks=3, max_blocks=100, storage_rate=0.03),
+            )
+            registry = MagicMock()
+            registry.report_heartbeat = AsyncMock(return_value={"ok": True})
 
-        await report_assigned_heartbeat(identity, blocks, registry)
+            await report_assigned_heartbeat(identity, blocks, registry, settings)
 
-        registry.report_heartbeat.assert_awaited_once_with(
-            stored_blocks=3,
-            max_blocks=100,
-            storage_rate=0.03,
-        )
+            registry.report_heartbeat.assert_awaited_once_with(
+                stored_blocks=3,
+                max_blocks=100,
+                storage_rate=0.03,
+                block_max_age_seconds=86400,
+                block_sweep_interval_seconds=3600,
+            )
 
     async def test_assignment_triggers_immediate_heartbeat(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

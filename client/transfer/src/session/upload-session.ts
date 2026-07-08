@@ -1,5 +1,5 @@
 import type { UploadMap } from '../types.js';
-import type { RegistryClient } from '../router/registry-client.js';
+import type { RegistryClient, UploadReservationMeta } from '../router/registry-client.js';
 import type { RelayRouter } from '../router/relay-router.js';
 import type { FetchUploadClient } from '../transport/fetch-upload-client.js';
 import type { TwelveCClient } from '../wasm/twelve-c-client.js';
@@ -47,6 +47,8 @@ export interface UploadProgress {
 export interface UploadPreparedResult {
   /** primary 已全部完成；replica 在后台异步补传（无 replica 时为 undefined） */
   replicaSync?: Promise<void>;
+  /** Registry reserve-tokens 的 TTL / 布局分配结果 */
+  reservation?: UploadReservationMeta;
 }
 
 /** reserve 已成功、primary Relay PUT 在重试耗尽后仍失败 */
@@ -123,8 +125,9 @@ export async function uploadPrepared(
 
   const registry = options.registry;
   const replicaJobs = collectReplicaJobs(uploads, routePlan);
+  const reservation = routePlan.reservation;
   if (registry === undefined || replicaJobs.length === 0) {
-    return {};
+    return reservation !== undefined ? { reservation } : {};
   }
 
   const replicaSync = runAsyncReplicaReplication(
@@ -141,12 +144,16 @@ export async function uploadPrepared(
     },
   );
 
-  return { replicaSync };
+  return {
+    replicaSync,
+    ...(reservation !== undefined ? { reservation } : {}),
+  };
 }
 
 export interface UploadFileResult {
   uploads: UploadMap;
   replicaSync?: Promise<void>;
+  reservation?: UploadReservationMeta;
 }
 
 /**
@@ -163,14 +170,14 @@ export async function uploadFile(
   originalFileName?: string,
 ): Promise<UploadFileResult> {
   const uploads = twelveC.prepareUpload(filePlaintext, credential, originalFileName);
-  const { replicaSync } = await uploadPrepared(
+  const prepared = await uploadPrepared(
     uploads,
     router,
     uploadClient,
     options,
     onProgress,
   );
-  return { uploads, replicaSync };
+  return { uploads, ...prepared };
 }
 
 /**
@@ -190,6 +197,7 @@ export {
   reserveAndRegisterUploadBlocks,
   type UploadRoutePlan,
   type ReplicaUploadTarget,
+  type UploadReservationMeta,
   type ReplicaReplicationJob,
 } from './upload-registry.js';
 

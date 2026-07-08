@@ -9,7 +9,13 @@ import aiosqlite
 from ..config import AllowlistEntry, RegistryServerConfig, generate_registry_api_key
 from ..crypto.block_auth import derive_block_auth_key
 from ..crypto.keys import encrypt_registry_api_key_for_relay, encrypt_secret_bytes_for_relay, hash_registry_api_key
-from ..scheduling.placement import HealthyRelay, plan_token_placements
+from ..scheduling.placement import HealthyRelay
+from ..scheduling.placement_ttl import (
+    DEFAULT_BLOCK_MAX_AGE_SECONDS,
+    DEFAULT_BLOCK_SWEEP_INTERVAL_SECONDS,
+    InsufficientRelayCapacityError,
+    resolve_placement_with_ttl,
+)
 
 
 def utc_now() -> datetime:
@@ -35,6 +41,18 @@ class RelayTarget:
 class TokenReserveResult:
     token: str
     targets: tuple[RelayTarget, ...]
+
+
+@dataclass(frozen=True)
+class LockTokensOutcome:
+    routes: tuple[TokenReserveResult, ...]
+    granted_ttl_seconds: int
+    requested_ttl_seconds: int
+    degraded: bool
+    stripe_count: int
+    replica_factor: int
+    ideal_relay_count: int
+    actual_relay_count: int
 
 
 @dataclass(frozen=True)
@@ -64,6 +82,8 @@ class RelayState:
     max_blocks: int
     storage_rate: float
     last_heartbeat_at: str
+    block_max_age_seconds: int
+    block_sweep_interval_seconds: int
 
 
 @dataclass(frozen=True)
@@ -181,7 +201,9 @@ class RegistryRepository:
                     stored_blocks INTEGER NOT NULL,
                     max_blocks INTEGER NOT NULL,
                     storage_rate REAL NOT NULL,
-                    last_heartbeat_at TEXT NOT NULL
+                    last_heartbeat_at TEXT NOT NULL,
+                    block_max_age_seconds INTEGER NOT NULL DEFAULT 86400,
+                    block_sweep_interval_seconds INTEGER NOT NULL DEFAULT 3600
                 )
                 """,
             )
@@ -222,6 +244,7 @@ class RegistryRepository:
                 """,
             )
             await self._migrate_registration_requests_schema(db)
+            await self._migrate_relay_states_ttl_columns(db)
             await db.execute(
                 """
                 CREATE TABLE IF NOT EXISTS relay_block_auth_keys (
@@ -260,6 +283,28 @@ class RegistryRepository:
             )
             """,
         )
+        await db.commit()
+
+    async def _migrate_relay_states_ttl_columns(self, db: aiosqlite.Connection) -> None:
+        cursor = await db.execute("PRAGMA table_info(relay_states)")
+        rows = await cursor.fetchall()
+        if not rows:
+            return
+        columns = {row[1] for row in rows}
+        if "block_max_age_seconds" not in columns:
+            await db.execute(
+                """
+                ALTER TABLE relay_states
+                ADD COLUMN block_max_age_seconds INTEGER NOT NULL DEFAULT 86400
+                """,
+            )
+        if "block_sweep_interval_seconds" not in columns:
+            await db.execute(
+                """
+                ALTER TABLE relay_states
+                ADD COLUMN block_sweep_interval_seconds INTEGER NOT NULL DEFAULT 3600
+                """,
+            )
         await db.commit()
 
     async def _seed_allowlist(self) -> None:
@@ -618,7 +663,8 @@ class RegistryRepository:
             cursor = await db.execute(
                 """
                 SELECT relay_id, relay_base_url, status, stored_blocks,
-                       max_blocks, storage_rate, last_heartbeat_at
+                       max_blocks, storage_rate, last_heartbeat_at,
+                       block_max_age_seconds, block_sweep_interval_seconds
                 FROM relay_states
                 ORDER BY relay_id ASC
                 """,
@@ -633,6 +679,8 @@ class RegistryRepository:
                     max_blocks=int(row["max_blocks"]),
                     storage_rate=float(row["storage_rate"]),
                     last_heartbeat_at=str(row["last_heartbeat_at"]),
+                    block_max_age_seconds=int(row["block_max_age_seconds"]),
+                    block_sweep_interval_seconds=int(row["block_sweep_interval_seconds"]),
                 )
                 for row in rows
             ]
@@ -764,7 +812,8 @@ class RegistryRepository:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute(
                 """
-                SELECT rs.relay_id, rs.relay_base_url, rs.storage_rate
+                SELECT rs.relay_id, rs.relay_base_url, rs.storage_rate,
+                       rs.block_max_age_seconds, rs.block_sweep_interval_seconds
                 FROM relay_states rs
                 INNER JOIN registry_allowlist al ON al.relay_id = rs.relay_id
                 WHERE al.enabled = 1 AND rs.last_heartbeat_at > ?
@@ -779,6 +828,8 @@ class RegistryRepository:
                         relay_id=str(row["relay_id"]),
                         relay_base_url=str(row["relay_base_url"]).rstrip("/"),
                         storage_rate=float(row["storage_rate"]),
+                        block_max_age_seconds=int(row["block_max_age_seconds"]),
+                        block_sweep_interval_seconds=int(row["block_sweep_interval_seconds"]),
                     )
                     for row in rows
                 ]
@@ -797,6 +848,8 @@ class RegistryRepository:
                     relay_id=str(row["relay_id"]),
                     relay_base_url=str(row["relay_base_url"]).rstrip("/"),
                     storage_rate=0.0,
+                    block_max_age_seconds=DEFAULT_BLOCK_MAX_AGE_SECONDS,
+                    block_sweep_interval_seconds=DEFAULT_BLOCK_SWEEP_INTERVAL_SECONDS,
                 )
                 for row in rows
             ]
@@ -891,10 +944,19 @@ class RegistryRepository:
         entries: list[tuple[str, str]],
         *,
         ttl_seconds: int | None = None,
-    ) -> list[TokenReserveResult]:
+    ) -> LockTokensOutcome:
         await self.purge_expired_tokens()
         if not entries:
-            return []
+            return LockTokensOutcome(
+                routes=(),
+                granted_ttl_seconds=self._config.token_ttl_seconds,
+                requested_ttl_seconds=self._config.token_ttl_seconds,
+                degraded=False,
+                stripe_count=0,
+                replica_factor=0,
+                ideal_relay_count=0,
+                actual_relay_count=0,
+            )
 
         unique: list[tuple[str, str]] = []
         seen: set[str] = set()
@@ -922,20 +984,23 @@ class RegistryRepository:
         healthy = await self.list_healthy_relays()
         if not healthy:
             raise RuntimeError("no healthy relay available for upload assignment")
-        _, planned = plan_token_placements(
-            unique,
-            healthy,
-            stripe_target_relays=self._config.stripe_target_relays,
-            max_file_replica_count=self._config.max_file_replica_count,
-            max_replicas_per_block=self._config.max_replicas_per_block,
-        )
 
-        now = utc_now()
-        effective_ttl = (
+        requested_ttl = (
             ttl_seconds if ttl_seconds is not None else self._config.token_ttl_seconds
         )
-        effective_ttl = max(1, min(86400, effective_ttl))
-        expiry = (now + timedelta(seconds=effective_ttl)).isoformat()
+        try:
+            resolution = resolve_placement_with_ttl(
+                unique,
+                healthy,
+                requested_ttl=requested_ttl,
+                policy=self._config.placement_policy,
+            )
+        except InsufficientRelayCapacityError as exc:
+            raise RuntimeError(str(exc)) from exc
+
+        planned = resolution.placements
+        now = utc_now()
+        expiry = (now + timedelta(seconds=resolution.granted_ttl_seconds)).isoformat()
         now_iso = now.isoformat()
 
         async with aiosqlite.connect(self._database_path) as db:
@@ -972,7 +1037,16 @@ class RegistryRepository:
                 raise RuntimeError(f"failed to lock token placements: {token}")
             locked.append(self._placements_to_reserve_result(token, placements))
 
-        return locked
+        return LockTokensOutcome(
+            routes=tuple(locked),
+            granted_ttl_seconds=resolution.granted_ttl_seconds,
+            requested_ttl_seconds=resolution.requested_ttl_seconds,
+            degraded=resolution.degraded,
+            stripe_count=resolution.placement_plan.stripe_count,
+            replica_factor=resolution.placement_plan.replica_factor,
+            ideal_relay_count=resolution.ideal_relay_count,
+            actual_relay_count=resolution.actual_relay_count,
+        )
 
     async def get_resolve_targets(self, token: str) -> TokenReserveResult | None:
         placements = await self.get_token_placements(token)
@@ -1057,6 +1131,8 @@ class RegistryRepository:
         stored_blocks: int,
         max_blocks: int,
         storage_rate: float,
+        block_max_age_seconds: int = DEFAULT_BLOCK_MAX_AGE_SECONDS,
+        block_sweep_interval_seconds: int = DEFAULT_BLOCK_SWEEP_INTERVAL_SECONDS,
     ) -> None:
         now = utc_now_iso()
         async with aiosqlite.connect(self._database_path) as db:
@@ -1064,15 +1140,18 @@ class RegistryRepository:
                 """
                 INSERT INTO relay_states (
                     relay_id, relay_base_url, status, stored_blocks,
-                    max_blocks, storage_rate, last_heartbeat_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    max_blocks, storage_rate, last_heartbeat_at,
+                    block_max_age_seconds, block_sweep_interval_seconds
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(relay_id) DO UPDATE SET
                     relay_base_url = excluded.relay_base_url,
                     status = excluded.status,
                     stored_blocks = excluded.stored_blocks,
                     max_blocks = excluded.max_blocks,
                     storage_rate = excluded.storage_rate,
-                    last_heartbeat_at = excluded.last_heartbeat_at
+                    last_heartbeat_at = excluded.last_heartbeat_at,
+                    block_max_age_seconds = excluded.block_max_age_seconds,
+                    block_sweep_interval_seconds = excluded.block_sweep_interval_seconds
                 """,
                 (
                     relay_id,
@@ -1082,6 +1161,8 @@ class RegistryRepository:
                     max_blocks,
                     storage_rate,
                     now,
+                    block_max_age_seconds,
+                    block_sweep_interval_seconds,
                 ),
             )
             await db.commit()

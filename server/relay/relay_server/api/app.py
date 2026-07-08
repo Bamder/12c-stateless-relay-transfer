@@ -53,6 +53,8 @@ def create_app(config: RelayServerConfig | None = None) -> FastAPI:
         registry_api_keys=registry_api_keys,
         block_auth_keys=block_auth_keys,
         http_proxy=settings.registry.http_proxy,
+        block_max_age_seconds=settings.block_max_age_seconds,
+        block_sweep_interval_seconds=settings.block_sweep_interval_seconds,
     )
     blocks = BlockService(
         config=settings,

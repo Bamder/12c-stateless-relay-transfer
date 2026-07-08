@@ -677,6 +677,23 @@ const INSTALL_ID_HELP =
   "首次启动时本地生成的 UUID，用于在注册的申请与审批中标识注册方。自生成后保存在本地文件中，通常不会更改。";
 const PUBLIC_URL_HELP =
   "对外服务根地址。客户端与 Registry 通过此 URL 拉取/上传块（{地址}/{token}）。须为外部实际可达地址，而非本机监听地址；修改后需重启 Relay。";
+const EFFECTIVE_STORAGE_CAP_HELP =
+  "Registry 分配上传路由时使用的最长可承诺 TTL（块 TTL 减 60 秒时钟余量）。sweep 仅在块到期后才会删除，不会因此缩短该值。";
+const CLOCK_SKEW_SECONDS = 60;
+
+function relayEffectiveCapSeconds(relay) {
+  const blockMaxAge = relay?.blockMaxAgeSeconds;
+  if (blockMaxAge == null || Number.isNaN(Number(blockMaxAge))) {
+    return null;
+  }
+  return Math.max(1, Number(blockMaxAge) - CLOCK_SKEW_SECONDS);
+}
+
+function formatEffectiveStorageCap(relay) {
+  const seconds = relayEffectiveCapSeconds(relay);
+  if (seconds == null) return "—";
+  return String(seconds);
+}
 
 function renderStatCardHelpButton(helpText, label) {
   return `
@@ -978,6 +995,13 @@ function renderRelayOverview(relay, registryUrl, connectivityContext = {}) {
     renderStatCluster("生命周期", [
       ["块 TTL (秒)", relay.blockMaxAgeSeconds ?? "—"],
       ["清理间隔 (秒)", relay.blockSweepIntervalSeconds ?? "—"],
+    ]) +
+    renderOverviewCluster("Registry 调度", [
+      {
+        label: "有效存储能力 (秒)",
+        value: formatEffectiveStorageCap(relay),
+        helpText: EFFECTIVE_STORAGE_CAP_HELP,
+      },
     ]) +
     renderStoragePieCard(relay);
 
