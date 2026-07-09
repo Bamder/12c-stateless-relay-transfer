@@ -498,10 +498,25 @@ body {
   background: var(--surface2);
 }
 
+.relay-card .relay-id-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
 .relay-card .relay-id {
   font-weight: 600;
   font-size: 0.95rem;
   word-break: break-all;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.relay-card .relay-id-row .status-badge,
+.relay-card .relay-id-row .relay-removal-hint {
+  flex-shrink: 0;
 }
 
 .relay-card .relay-url {
@@ -801,6 +816,35 @@ body {
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--muted);
+}
+
+.stat-cluster-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.35rem;
+  margin-bottom: 0.15rem;
+}
+
+.stat-card--cluster-has-title-help .stat-cluster-head {
+  margin-bottom: 0.35rem;
+}
+
+.stat-cluster-title-actions .stat-card-help-btn {
+  position: static;
+  width: 1.15rem;
+  height: 1.15rem;
+}
+
+.relay-card .relay-cap {
+  font-size: 0.72rem;
+  color: var(--muted);
+  line-height: 1.35;
+}
+
+.relay-card .relay-cap-label {
+  font-weight: 600;
+  color: #64748b;
 }
 
 .stat-cluster-label {

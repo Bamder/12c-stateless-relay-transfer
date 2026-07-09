@@ -98,6 +98,8 @@ class RelayOverview:
     max_blocks: int | None
     storage_rate: float | None
     last_heartbeat_at: str | None
+    block_max_age_seconds: int | None = None
+    block_sweep_interval_seconds: int | None = None
 
 
 @dataclass(frozen=True)
@@ -724,6 +726,12 @@ class RegistryRepository:
                     max_blocks=state.max_blocks if state is not None else None,
                     storage_rate=state.storage_rate if state is not None else None,
                     last_heartbeat_at=last_heartbeat,
+                    block_max_age_seconds=(
+                        state.block_max_age_seconds if state is not None else None
+                    ),
+                    block_sweep_interval_seconds=(
+                        state.block_sweep_interval_seconds if state is not None else None
+                    ),
                 ),
             )
         return overviews
