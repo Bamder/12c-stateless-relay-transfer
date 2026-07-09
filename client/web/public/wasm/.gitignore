@@ -1,2 +1,0 @@
-# WASM 由 npm run copy:wasm 从 transfer/pkg 复制
-*.wasm
