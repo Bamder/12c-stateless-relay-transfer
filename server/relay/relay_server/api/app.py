@@ -17,7 +17,6 @@ from ..persistence.repository import BlockRepository
 from ..registry.api_key_manager import RegistryApiKeyManager
 from ..registry.block_auth_key_manager import BlockAuthKeyManager
 from ..registry.client import RegistryClient
-from ..registry.connectivity import registry_connectivity_snapshot
 from ..identity import RelayIdentityManager
 from ..runtime.background import (
     run_block_sweep,
@@ -53,8 +52,6 @@ def create_app(config: RelayServerConfig | None = None) -> FastAPI:
         registry_api_keys=registry_api_keys,
         block_auth_keys=block_auth_keys,
         http_proxy=settings.registry.http_proxy,
-        block_max_age_seconds=settings.block_max_age_seconds,
-        block_sweep_interval_seconds=settings.block_sweep_interval_seconds,
     )
     blocks = BlockService(
         config=settings,
@@ -141,10 +138,8 @@ def create_app(config: RelayServerConfig | None = None) -> FastAPI:
             "storageRate": stats.storage_rate,
             "blockMaxAgeSeconds": settings.block_max_age_seconds,
             "blockSweepIntervalSeconds": settings.block_sweep_interval_seconds,
-            "heartbeatIntervalSeconds": settings.heartbeat_interval_seconds,
             "registryApiKeyReady": registry_api_keys.has_registry_api_key,
             "blockAuthKeyReady": block_auth_keys.has_block_auth_key,
-            **registry_connectivity_snapshot(),
         }
 
     @app.put("/{token}")
