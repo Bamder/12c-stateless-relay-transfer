@@ -1,7 +1,0 @@
-__pycache__/
-*.py[cod]
-.venv/
-venv/
-data/
-registry_server.config.json
-*.secrets.json
