@@ -717,6 +717,10 @@ def serialize_relay_overview(overview: RelayOverview) -> dict[str, object]:
         payload["storageRate"] = overview.storage_rate
     if overview.last_heartbeat_at is not None:
         payload["lastHeartbeatAt"] = overview.last_heartbeat_at
+    if overview.block_max_age_seconds is not None:
+        payload["blockMaxAgeSeconds"] = overview.block_max_age_seconds
+    if overview.block_sweep_interval_seconds is not None:
+        payload["blockSweepIntervalSeconds"] = overview.block_sweep_interval_seconds
     return payload
 
 

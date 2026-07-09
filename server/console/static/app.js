@@ -355,15 +355,19 @@ function renderRelayGrid(relays) {
       const stored = relay.storedBlocks ?? 0;
       const max = relay.maxBlocks ?? 0;
       const pct = max > 0 ? Math.min(100, Math.round((stored / max) * 100)) : 0;
-      const statusRow = pending
+      const capLabel = formatRelayPromisedCapLabel(relay);
+      const statusHtml = pending
         ? '<div class="relay-removal-hint">移除中 · 刷新以更新状态</div>'
         : `<span class="status-badge ${statusClass(relay.healthStatus)}">${escapeHtml(statusLabel(relay.healthStatus))}</span>`;
       return `
         <article class="relay-card${pending ? " pending-removal" : ""}" data-relay-id="${escapeHtml(relay.relayId)}">
           <div class="thumb">${escapeHtml(relayInitials(relay.relayId))}</div>
-          <div class="relay-id">${escapeHtml(relay.relayId)}</div>
+          <div class="relay-id-row">
+            <div class="relay-id">${escapeHtml(relay.relayId)}</div>
+            ${statusHtml}
+          </div>
           <div class="relay-url">${escapeHtml(relay.relayBaseUrl || "—")}</div>
-          ${statusRow}
+          <div class="relay-cap" title="留存周期可承诺上限 (秒)"><span class="relay-cap-label">留存上限</span> ${escapeHtml(capLabel)}</div>
           <div class="storage-bar" title="${stored} / ${max} blocks"><span style="width:${pct}%"></span></div>
         </article>`;
     })
@@ -677,8 +681,8 @@ const INSTALL_ID_HELP =
   "首次启动时本地生成的 UUID，用于在注册的申请与审批中标识注册方。自生成后保存在本地文件中，通常不会更改。";
 const PUBLIC_URL_HELP =
   "对外服务根地址。客户端与 Registry 通过此 URL 拉取/上传块（{地址}/{token}）。须为外部实际可达地址，而非本机监听地址；修改后需重启 Relay。";
-const EFFECTIVE_STORAGE_CAP_HELP =
-  "Registry 分配上传路由时使用的最长可承诺 TTL（块 TTL 减 60 秒时钟余量）。sweep 仅在块到期后才会删除，不会因此缩短该值。";
+const BLOCK_RETENTION_HELP =
+  "本地块 TTL 与清理间隔由 Relay 本地配置。Registry 分配上传路由时以可承诺上限（本地块 TTL 减 60 秒时钟余量）作为最长 TTL；过期块仅在生命超出本地块 TTL 后被删除。";
 const CLOCK_SKEW_SECONDS = 60;
 
 function relayEffectiveCapSeconds(relay) {
@@ -693,6 +697,12 @@ function formatEffectiveStorageCap(relay) {
   const seconds = relayEffectiveCapSeconds(relay);
   if (seconds == null) return "—";
   return String(seconds);
+}
+
+function formatRelayPromisedCapLabel(relay) {
+  const seconds = relayEffectiveCapSeconds(relay);
+  if (seconds == null) return "—";
+  return `${seconds}s`;
 }
 
 function renderStatCardHelpButton(helpText, label) {
@@ -871,9 +881,15 @@ function renderOverviewCluster(title, rows, options = {}) {
       </div>`;
     })
     .join("");
+  const titleHtml = options.helpText
+    ? `<div class="stat-cluster-head">
+        <div class="stat-cluster-title">${escapeHtml(title)}</div>
+        <div class="stat-cluster-title-actions">${renderStatCardHelpButton(options.helpText, title)}</div>
+      </div>`
+    : `<div class="stat-cluster-title">${escapeHtml(title)}</div>`;
   return `
-    <div class="${clusterClass.trim()}">
-      <div class="stat-cluster-title">${escapeHtml(title)}</div>
+    <div class="${clusterClass.trim()}${options.helpText ? " stat-card--cluster-has-title-help" : ""}">
+      ${titleHtml}
       <div class="stat-cluster-rows">${rowsHtml}</div>
     </div>`;
 }
@@ -992,17 +1008,15 @@ function renderRelayOverview(relay, registryUrl, connectivityContext = {}) {
       ["剩余容量", formatRemainingBlocks(relay.storedBlocks, relay.maxBlocks)],
       ["容量上限", relay.maxBlocks ?? "—"],
     ]) +
-    renderStatCluster("生命周期", [
-      ["块 TTL (秒)", relay.blockMaxAgeSeconds ?? "—"],
-      ["清理间隔 (秒)", relay.blockSweepIntervalSeconds ?? "—"],
-    ]) +
-    renderOverviewCluster("Registry 调度", [
-      {
-        label: "有效存储能力 (秒)",
-        value: formatEffectiveStorageCap(relay),
-        helpText: EFFECTIVE_STORAGE_CAP_HELP,
-      },
-    ]) +
+    renderOverviewCluster(
+      "留存周期",
+      [
+        { label: "本地块 TTL (秒)", value: relay.blockMaxAgeSeconds ?? "—" },
+        { label: "清理间隔 (秒)", value: relay.blockSweepIntervalSeconds ?? "—" },
+        { label: "可承诺上限 (秒)", value: formatEffectiveStorageCap(relay) },
+      ],
+      { helpText: BLOCK_RETENTION_HELP },
+    ) +
     renderStoragePieCard(relay);
 
   const registryConnectivity = registryConnectivityMeta(relay, connectivityContext);
