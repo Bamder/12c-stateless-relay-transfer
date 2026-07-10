@@ -7,6 +7,7 @@ from ..config import RelayServerConfig
 from ..domain.blocks import BlockService
 from ..identity import RelayIdentityManager
 from ..registry.client import RegistryClient
+from ..registry.connectivity import record_registry_failure, record_registry_success
 
 logger = logging.getLogger(__name__)
 
@@ -30,8 +31,10 @@ async def run_startup_auto_registration(
             result.get("status"),
         )
         if identity.is_assigned:
-            await report_assigned_heartbeat(identity, blocks, registry)
-    except Exception:
+            await report_assigned_heartbeat(identity, blocks, registry, settings)
+        record_registry_success()
+    except Exception as exc:
+        record_registry_failure(exc)
         logger.exception(
             "startup auto registration failed install=%s",
             identity.install_id,
@@ -56,12 +59,15 @@ async def report_assigned_heartbeat(
     identity: RelayIdentityManager,
     blocks: BlockService,
     registry: RegistryClient,
+    settings: RelayServerConfig,
 ) -> None:
     stats = await blocks.stats()
     result = await registry.report_heartbeat(
         stored_blocks=stats.stored_blocks,
         max_blocks=stats.max_blocks,
         storage_rate=stats.storage_rate,
+        block_max_age_seconds=settings.block_max_age_seconds,
+        block_sweep_interval_seconds=settings.block_sweep_interval_seconds,
     )
     if result.get("notAllowlisted"):
         logger.info(
@@ -138,8 +144,10 @@ async def relay_registry_loop(
         try:
             await sync_relay_assignment_from_registry(identity, registry)
             if identity.is_assigned:
-                await report_assigned_heartbeat(identity, blocks, registry)
-        except Exception:
+                await report_assigned_heartbeat(identity, blocks, registry, settings)
+            record_registry_success()
+        except Exception as exc:
+            record_registry_failure(exc)
             logger.exception("relay registry sync failed install=%s", identity.install_id)
         await asyncio.sleep(settings.heartbeat_interval_seconds)
 
