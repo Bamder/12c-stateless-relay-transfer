@@ -45,8 +45,6 @@ class RegistryClient:
         registry_api_keys: RegistryApiKeyManager,
         block_auth_keys: BlockAuthKeyManager,
         http_proxy: str | None = None,
-        block_max_age_seconds: int = 86400,
-        block_sweep_interval_seconds: int = 3600,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._identity = identity
@@ -54,8 +52,6 @@ class RegistryClient:
         self._http_proxy = http_proxy
         self._registry_api_keys = registry_api_keys
         self._block_auth_keys = block_auth_keys
-        self._block_max_age_seconds = block_max_age_seconds
-        self._block_sweep_interval_seconds = block_sweep_interval_seconds
         self._client = _create_registry_http_client(
             self._base_url,
             http_proxy=self._http_proxy,
@@ -106,8 +102,6 @@ class RegistryClient:
             stored_blocks=0,
             max_blocks=1,
             storage_rate=0.0,
-            block_max_age_seconds=self._block_max_age_seconds,
-            block_sweep_interval_seconds=self._block_sweep_interval_seconds,
         )
         if result.get("notAllowlisted"):
             return
@@ -225,8 +219,6 @@ class RegistryClient:
         stored_blocks: int,
         max_blocks: int,
         storage_rate: float,
-        block_max_age_seconds: int,
-        block_sweep_interval_seconds: int,
     ) -> dict[str, object]:
         relay_id = self._assigned_relay_id()
         if not relay_id:
@@ -241,8 +233,6 @@ class RegistryClient:
                 "storedBlocks": stored_blocks,
                 "maxBlocks": max_blocks,
                 "storageRate": storage_rate,
-                "blockMaxAgeSeconds": block_max_age_seconds,
-                "blockSweepIntervalSeconds": block_sweep_interval_seconds,
                 "registryApiKeyId": auth_fields["registryApiKeyId"],
                 "registryApiKey": auth_fields["registryApiKey"],
                 "relayPublicKeyPem": auth_fields["relayPublicKeyPem"],
@@ -262,8 +252,6 @@ class RegistryClient:
                     "storedBlocks": stored_blocks,
                     "maxBlocks": max_blocks,
                     "storageRate": storage_rate,
-                    "blockMaxAgeSeconds": block_max_age_seconds,
-                    "blockSweepIntervalSeconds": block_sweep_interval_seconds,
                     "registryApiKeyId": auth_fields["registryApiKeyId"],
                     "registryApiKey": auth_fields["registryApiKey"],
                     "relayPublicKeyPem": auth_fields["relayPublicKeyPem"],
