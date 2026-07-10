@@ -20,7 +20,7 @@
     "build:openssl:wasm": "powershell -ExecutionPolicy Bypass -File ./core/twelve_c_wasm/build-openssl-emscripten.ps1",
     "build:openssl:wasm:sh": "bash ./core/twelve_c_wasm/build-openssl-emscripten.sh",
     "build:native": "powershell -ExecutionPolicy Bypass -File ./core/build-native.ps1",
-    "build:native:sh": "bash ./core/build-native.sh",
+    "build:native:sh": "bash ./core/build-native.sh"
     "electron:dev": "NODE_ENV=development electron electron/main.js",
     "electron:build": "npm run build:prod && electron-builder"
   },
