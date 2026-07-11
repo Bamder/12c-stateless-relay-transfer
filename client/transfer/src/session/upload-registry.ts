@@ -8,7 +8,7 @@ import {
   type ReplicaUploadTarget,
 } from '../router/endpoints-from-registry.js';
 import type { RelayEndpointMap, RelayRouter } from '../router/relay-router.js';
-
+import type { UploadStatusUpdate } from './upload-status.js';
 export type { ReplicaUploadTarget, UploadReservationMeta };
 
 export interface UploadRoutePlan {
@@ -20,6 +20,7 @@ export interface UploadRoutePlan {
 export interface ResolveUploadEndpointsOptions {
   registry?: RegistryClient;
   ttlSeconds?: number;
+  onStatus?: (status: UploadStatusUpdate) => void;
 }
 
 export async function resolveUploadEndpoints(
@@ -30,6 +31,7 @@ export async function resolveUploadEndpoints(
   if (options.registry !== undefined) {
     return reserveAndRegisterUploadBlocks(uploads, options.registry, {
       ttlSeconds: options.ttlSeconds,
+      onStatus: options.onStatus,
     });
   }
 
@@ -38,6 +40,7 @@ export async function resolveUploadEndpoints(
     return { primary: new Map(), replicas: new Map() };
   }
 
+  options.onStatus?.({ phase: 'reserving' });
   return {
     primary: await router.resolveMany(tokens),
     replicas: new Map(),
@@ -47,16 +50,21 @@ export async function resolveUploadEndpoints(
 export async function reserveAndRegisterUploadBlocks(
   uploads: UploadMap,
   registry: RegistryClient,
-  options: { ttlSeconds?: number } = {},
+  options: { ttlSeconds?: number; onStatus?: (status: UploadStatusUpdate) => void } = {},
 ): Promise<UploadRoutePlan> {
   const entries: BlockHashEntry[] = [];
+  const total = uploads.size;
+  let index = 0;
   for (const [token, blob] of uploads) {
+    index++;
+    options.onStatus?.({ phase: 'hashing', index, total });
     entries.push({
       token,
       blockHash: await computeBlockHashSha256(blob),
     });
   }
 
+  options.onStatus?.({ phase: 'reserving' });
   const reserveResult = await registry.reserveUploadBlocks(entries, {
     ttlSeconds: options.ttlSeconds,
   });

@@ -9,6 +9,7 @@ import {
 } from './upload-registry.js';
 import { putWithRetry } from '../resilience/put-with-retry.js';
 import { runAsyncReplicaReplication } from './replica-replication.js';
+import type { UploadStatusUpdate } from './upload-status.js';
 
 export const DEFAULT_PUT_MAX_ATTEMPTS = 3;
 export const DEFAULT_PUT_RETRY_DELAY_MS = 500;
@@ -44,6 +45,8 @@ export interface UploadProgress {
   token: string;
 }
 
+export type { UploadStatusUpdate } from './upload-status.js';
+
 export interface UploadPreparedResult {
   /** primary 已全部完成；replica 在后台异步补传（无 replica 时为 undefined） */
   replicaSync?: Promise<void>;
@@ -72,7 +75,7 @@ export async function uploadPrepared(
   router: RelayRouter,
   uploadClient: FetchUploadClient,
   options: UploadSessionOptions = {},
-  onProgress?: (progress: UploadProgress) => void,
+  onProgress?: (status: UploadStatusUpdate) => void,
 ): Promise<UploadPreparedResult> {
   const entries = [...uploads.entries()];
   const total = entries.length;
@@ -91,10 +94,21 @@ export async function uploadPrepared(
   const routePlan = await resolveUploadEndpoints(uploads, router, {
     registry: options.registry,
     ttlSeconds: options.ttlSeconds,
+    onStatus: onProgress,
   });
 
   let completed = 0;
+  let inFlight = 0;
   let nextIndex = 0;
+
+  const reportUploading = (): void => {
+    onProgress?.({
+      phase: 'uploading',
+      completed,
+      inFlight,
+      total,
+    });
+  };
 
   async function worker(): Promise<void> {
     while (nextIndex < total) {
@@ -104,6 +118,8 @@ export async function uploadPrepared(
       if (endpoint === undefined) {
         throw new Error(`no relay endpoint for token: ${token}`);
       }
+      inFlight++;
+      reportUploading();
       try {
         await putWithRetry(uploadClient, endpoint, blob, {
           maxAttempts: putMaxAttempts,
@@ -111,9 +127,11 @@ export async function uploadPrepared(
         });
       } catch (cause) {
         throw new UploadPutError(token, putMaxAttempts, cause);
+      } finally {
+        inFlight--;
       }
       completed++;
-      onProgress?.({ completed, total, token });
+      reportUploading();
     }
   }
 
@@ -166,9 +184,10 @@ export async function uploadFile(
   router: RelayRouter,
   uploadClient: FetchUploadClient,
   options: UploadSessionOptions = {},
-  onProgress?: (progress: UploadProgress) => void,
+  onProgress?: (status: UploadStatusUpdate) => void,
   originalFileName?: string,
 ): Promise<UploadFileResult> {
+  onProgress?.({ phase: 'preparing' });
   const uploads = twelveC.prepareUpload(filePlaintext, credential, originalFileName);
   const prepared = await uploadPrepared(
     uploads,

@@ -111,6 +111,7 @@ export {
   DEFAULT_REPLICA_PUT_RETRY_DELAY_MS,
   DEFAULT_REPLICA_ASYNC_CONCURRENCY,
   type UploadProgress,
+  type UploadStatusUpdate,
   type UploadPreparedResult,
   type UploadFileResult,
   type UploadRoutePlan,

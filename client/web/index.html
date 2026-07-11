@@ -228,10 +228,16 @@
 
             <div class="send-upload-progress">
               <div class="progress-label">
-                <span>上传进度</span>
+                <span class="send-progress-label-group">
+                  <span class="send-progress-label-title">上传进度</span>
+                  <span id="send-upload-status" class="send-upload-status hidden" aria-live="polite">
+                    <span class="send-upload-spinner" aria-hidden="true"></span>
+                    <span id="send-upload-status-text" class="send-upload-status-text"></span>
+                  </span>
+                </span>
                 <span id="send-progress-text"></span>
               </div>
-              <div class="progress-bar send-progress-bar">
+              <div id="send-progress-track" class="progress-bar send-progress-bar">
                 <div id="send-progress-bar" class="progress-bar-fill"></div>
               </div>
             </div>
