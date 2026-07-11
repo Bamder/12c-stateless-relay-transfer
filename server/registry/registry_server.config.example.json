@@ -14,5 +14,6 @@
   },
   "relayHeartbeatStaleSeconds": 120,
   "heartbeatUrlPolicy": "sync_if_unset",
+  "clientStaticDir": "../../client/web/dist",
   "allowlist": []
 }

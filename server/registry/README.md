@@ -151,6 +151,26 @@ Canonical 串：`12C-BLOCK-AUTH-v1|keyId|token|relayId|relayBaseUrl|blockHash|ex
 
 控制面板见 `server/console/`。
 
+## Client Web 托管
+
+Registry 同时分发 `client/web/dist/` 静态产物，使 Client 与 Registry **同源绑定**：
+
+| 路径 | 说明 |
+|------|------|
+| `/` | Client Web（`index.html` + SPA 回退） |
+| `/relay.config.json` | 动态生成，Registry URL 为当前访问来源（支持 `X-Forwarded-*`） |
+| `/api/relay/*` | Registry API（优先于静态路由） |
+| `/health` | 健康检查；含 `clientDistReady` 字段 |
+
+配置项 `clientStaticDir`（默认 `../../client/web/dist`）；设为 `false` 可禁用托管。
+
+构建 Client 后重启 Registry：
+
+```powershell
+cd client
+.\build.ps1 -Production
+```
+
 ## 运行
 
 ```powershell

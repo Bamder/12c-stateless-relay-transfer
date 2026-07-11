@@ -17,5 +17,12 @@ if [[ ! -f registry_server.config.json ]]; then
   echo "Created registry_server.config.json — adminApiKey / blockAuthMasterKey auto-generate in registry_server.secrets.json."
 fi
 
-echo "Starting Registry on http://127.0.0.1:8080 ..."
+echo "Starting Registry (+ Client Web when dist/ is built) on http://127.0.0.1:8080 ..."
+if [[ ! -f ../../client/web/dist/index.html ]]; then
+  echo ""
+  echo "提示: client/web/dist/ 尚未构建，Registry 仅提供 API。构建后重启即可挂载 Client:"
+  echo "  cd client"
+  echo "  ./build.ps1 -Production"
+  echo ""
+fi
 exec "$PYTHON" -m registry_server "$@"
