@@ -28,7 +28,7 @@ cd client\web
 
 ## 配置
 
-编辑 `public/relay.config.json`：
+编辑 `public/relay.config.json`（**仅 Vite 开发模式**使用）：
 
 ```json
 {
@@ -37,6 +37,8 @@ cd client\web
   }
 }
 ```
+
+生产环境由 **Registry 托管**时，打开 `http://127.0.0.1:8080` 即可；Registry 会动态下发同源配置。
 
 需先启动 Registry 与至少一个已审批的 Relay。
 

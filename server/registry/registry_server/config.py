@@ -50,6 +50,7 @@ class RegistryServerConfig:
     relay_heartbeat_stale_seconds: int
     admin_api_key: str | None = None
     heartbeat_url_policy: str = HEARTBEAT_URL_POLICY_SYNC_IF_UNSET
+    client_static_dir: Path | None = None
 
     @classmethod
     def from_dict(cls, value: dict) -> RegistryServerConfig:
@@ -84,6 +85,7 @@ class RegistryServerConfig:
         )
         admin_api_key = _load_admin_api_key(value.get("adminApiKey"))
         heartbeat_url_policy = _parse_heartbeat_url_policy(value.get("heartbeatUrlPolicy"))
+        client_static_dir = _parse_client_static_dir(value.get("clientStaticDir"))
         return cls(
             host=host,
             port=port,
@@ -96,6 +98,7 @@ class RegistryServerConfig:
             relay_heartbeat_stale_seconds=relay_heartbeat_stale_seconds,
             admin_api_key=admin_api_key,
             heartbeat_url_policy=heartbeat_url_policy,
+            client_static_dir=client_static_dir,
         )
 
 
@@ -179,6 +182,16 @@ def _parse_allowlist(value: object) -> tuple[AllowlistEntry, ...]:
             ),
         )
     return tuple(entries)
+
+
+def _parse_client_static_dir(value: object) -> Path | None:
+    if value is None:
+        return Path("../../client/web/dist")
+    if value is False:
+        return None
+    if not isinstance(value, str) or not value:
+        raise ValueError("clientStaticDir must be a non-empty string or false")
+    return Path(value)
 
 
 def _parse_heartbeat_url_policy(value: object) -> str:
@@ -268,6 +281,12 @@ def _load_from_path(path: Path) -> RegistryServerConfig:
         if config.database_path.is_absolute()
         else (base_dir / config.database_path).resolve()
     )
+
+    def resolve_optional_path(value: Path | None) -> Path | None:
+        if value is None:
+            return None
+        return value if value.is_absolute() else (base_dir / value).resolve()
+
     return RegistryServerConfig(
         host=config.host,
         port=config.port,
@@ -280,6 +299,7 @@ def _load_from_path(path: Path) -> RegistryServerConfig:
         relay_heartbeat_stale_seconds=config.relay_heartbeat_stale_seconds,
         admin_api_key=config.admin_api_key,
         heartbeat_url_policy=config.heartbeat_url_policy,
+        client_static_dir=resolve_optional_path(config.client_static_dir),
     )
 
 
