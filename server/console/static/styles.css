@@ -565,20 +565,16 @@ body {
 }
 
 .overview-cards--identity {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
   gap: 0.65rem;
   align-items: stretch;
 }
 
-.overview-cards--identity > .stat-card--cluster {
-  flex: 1 1 14rem;
-  min-width: 12rem;
-}
-
+.overview-cards--identity > .stat-card--cluster,
 .overview-cards--identity > .stat-card--url-cluster {
-  flex: 2 1 18rem;
-  min-width: 15rem;
+  min-width: 0;
+  width: 100%;
 }
 
 .overview-cards--storage {
@@ -888,9 +884,12 @@ body {
     justify-self: center;
   }
 
+  .overview-cards--identity {
+    grid-template-columns: 1fr;
+  }
+
   .overview-cards--identity > .stat-card--cluster,
   .overview-cards--status > .stat-card--cluster {
-    flex: 1 1 100%;
     min-width: 0;
   }
 }
@@ -1368,6 +1367,96 @@ th {
 .dialog-fill-btn {
   width: 100%;
   margin-top: 0.15rem;
+  margin-bottom: 0.75rem;
+}
+
+.dialog-restart-mode {
+  border: none;
+  margin: 0.85rem 0 0;
+  padding: 0;
+}
+
+.dialog-restart-mode legend {
+  font-size: 0.85rem;
+  color: var(--muted);
+  margin-bottom: 0.35rem;
+  padding: 0;
+}
+
+.segmented-control {
+  position: relative;
+  display: flex;
+  gap: 0;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.segmented-control--disabled {
+  opacity: 0.65;
+  pointer-events: none;
+}
+
+.segmented-slider {
+  position: absolute;
+  top: 3px;
+  left: 0;
+  width: calc(50% - 3px);
+  height: calc(100% - 6px);
+  background: var(--accent);
+  border-radius: 6px;
+  box-shadow: 0 1px 4px rgba(2, 132, 199, 0.35);
+  transform: translateX(3px);
+  transition:
+    transform 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+    width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  pointer-events: none;
+  z-index: 0;
+}
+
+.segmented-option {
+  position: relative;
+  z-index: 1;
+  flex: 1;
+  margin: 0 !important;
+  display: flex;
+  flex-direction: row !important;
+  align-items: center;
+  justify-content: center;
+  gap: 0 !important;
+  color: inherit !important;
+  font-size: inherit;
+}
+
+.segmented-option input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.segmented-option span {
+  display: block;
+  width: 100%;
+  text-align: center;
+  padding: 0.45rem 0.65rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+  border-radius: 6px;
+  cursor: pointer;
+  user-select: none;
+  transition: color 0.25s ease;
+}
+
+.segmented-option input:checked + span {
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.segmented-option input:focus-visible + span {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 .dialog-wide {
