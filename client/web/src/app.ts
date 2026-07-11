@@ -14,7 +14,7 @@ import {
   resolveRegistryBaseUrl,
   uploadPrepared,
   type OccupiedTokenInfo,
-  type UploadProgress,
+  type UploadStatusUpdate,
   type UploadReservationMeta,
 } from '@stateless-relay/transfer';
 import type { ClientRuntime } from './runtime.js';
@@ -65,7 +65,10 @@ interface Elements {
   sendBtn: HTMLButtonElement;
   sendError: HTMLElement;
   sendInfo: HTMLElement;
+  sendUploadStatus: HTMLElement;
+  sendUploadStatusText: HTMLElement;
   sendProgressText: HTMLElement;
+  sendProgressTrack: HTMLElement;
   sendProgressBar: HTMLElement;
   sendCredentialSlots: HTMLElement;
   copyCredentialBtn: HTMLButtonElement;
@@ -173,7 +176,10 @@ function collectElements(): Elements {
     sendBtn: $('send-btn') as HTMLButtonElement,
     sendError: $('send-error'),
     sendInfo: $('send-info'),
+    sendUploadStatus: $('send-upload-status'),
+    sendUploadStatusText: $('send-upload-status-text'),
     sendProgressText: $('send-progress-text'),
+    sendProgressTrack: $('send-progress-track'),
     sendProgressBar: $('send-progress-bar'),
     sendCredentialSlots: $('send-credential-slots'),
     copyCredentialBtn: $('copy-credential-btn') as HTMLButtonElement,
@@ -312,7 +318,74 @@ function updateSendFilePicker(): void {
   updateSendControls();
 }
 
+function formatUploadStatusMessage(
+  status: UploadStatusUpdate | { phase: 'reading' },
+): string {
+  switch (status.phase) {
+    case 'reading':
+      return '正在读取文件';
+    case 'preparing':
+      return '正在加密并分块';
+    case 'hashing':
+      return status.total > 1
+        ? `正在计算块哈希（${status.index} / ${status.total}）`
+        : '正在计算块哈希';
+    case 'reserving':
+      return '等待服务器返回各块的定位结果';
+    case 'uploading':
+      if (status.completed >= status.total) {
+        return '上传完成';
+      }
+      if (status.completed === 0 && status.inFlight > 0) {
+        return status.total > 1
+          ? `正在上传（${status.inFlight} / ${status.total} 块进行中）`
+          : '正在上传';
+      }
+      return status.total > 1
+        ? `正在上传（${status.completed} / ${status.total} 块已完成）`
+        : '正在上传';
+    default:
+      return '正在处理';
+  }
+}
+
+function setSendUploadStatus(
+  status: UploadStatusUpdate | { phase: 'reading' } | null,
+): void {
+  if (!status) {
+    el.sendUploadStatus.classList.add('hidden');
+    el.sendProgressTrack.classList.remove('indeterminate');
+    return;
+  }
+
+  el.sendUploadStatus.classList.remove('hidden');
+  el.sendUploadStatusText.textContent = formatUploadStatusMessage(status);
+
+  if (status.phase === 'uploading') {
+    el.sendProgressText.textContent = `${status.completed} / ${status.total}`;
+    if (status.completed >= status.total) {
+      el.sendProgressTrack.classList.remove('indeterminate');
+      el.sendProgressBar.style.width = '100%';
+      return;
+    }
+    if (status.completed === 0 && status.inFlight > 0) {
+      el.sendProgressTrack.classList.add('indeterminate');
+      el.sendProgressBar.style.width = '';
+      return;
+    }
+    el.sendProgressTrack.classList.remove('indeterminate');
+    const ratio = status.total > 0 ? status.completed / status.total : 0;
+    el.sendProgressBar.style.width = `${Math.max(4, Math.round(ratio * 100))}%`;
+    return;
+  }
+
+  el.sendProgressTrack.classList.add('indeterminate');
+  el.sendProgressBar.style.width = '';
+  el.sendProgressText.textContent = '';
+}
+
 function resetSendProgress(): void {
+  setSendUploadStatus(null);
   el.sendProgressBar.style.width = '0%';
   el.sendProgressText.textContent = '';
 }
@@ -377,6 +450,7 @@ async function handleSend(): Promise<void> {
   const bytesPromise = selectedFile
     .arrayBuffer()
     .then((buffer) => new Uint8Array(buffer));
+  setSendUploadStatus({ phase: 'reading' });
   await display.enterReelWhenReady(bytesPromise);
   const bytes = await bytesPromise;
 
@@ -388,6 +462,7 @@ async function handleSend(): Promise<void> {
       const credential = generateCredential(getEffectiveCredentialStyle());
 
       try {
+        setSendUploadStatus({ phase: 'preparing' });
         const uploads = prepareUpload(
           bytes,
           credential,
@@ -405,12 +480,14 @@ async function handleSend(): Promise<void> {
             registry: client.stack.registry,
             ttlSeconds: getEffectiveFileTtlSeconds(),
           },
-          (progress: UploadProgress) => {
-            const ratio = progress.total > 0 ? progress.completed / progress.total : 0;
-            el.sendProgressBar.style.width = `${Math.round(ratio * 100)}%`;
-            el.sendProgressText.textContent = `${progress.completed} / ${progress.total}`;
+          (status: UploadStatusUpdate) => {
+            setSendUploadStatus(status);
           },
         );
+
+        setSendUploadStatus(null);
+        el.sendProgressBar.style.width = '100%';
+        el.sendProgressText.textContent = `${uploads.size} / ${uploads.size}`;
 
         if (reservation?.degraded) {
           showBanner(
@@ -440,6 +517,7 @@ async function handleSend(): Promise<void> {
 
     throw new UploadTokenReservationExhaustedError(maxAttempts, lastOccupiedTokens);
   } catch (error) {
+    setSendUploadStatus(null);
     const message = error instanceof Error ? error.message : String(error);
     showBanner(el.sendError, message);
     if (!display.getValue()) {

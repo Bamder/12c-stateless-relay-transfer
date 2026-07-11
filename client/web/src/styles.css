@@ -986,6 +986,57 @@ input[type="file"] {
   border-top: 1px solid var(--border);
 }
 
+.send-upload-progress .progress-label {
+  align-items: center;
+}
+
+.send-progress-label-group {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  min-width: 0;
+}
+
+.send-progress-label-title {
+  flex-shrink: 0;
+}
+
+.send-upload-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+.send-upload-status.hidden {
+  display: none;
+}
+
+.send-upload-spinner {
+  flex-shrink: 0;
+  width: 1rem;
+  height: 1rem;
+  border: 2px solid rgba(2, 132, 199, 0.2);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: send-upload-spin 0.75s linear infinite;
+}
+
+.send-upload-status-text {
+  font-size: 0.8rem;
+  color: var(--muted);
+  line-height: 1.35;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@keyframes send-upload-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .send-progress-bar {
   background: var(--progress-track);
 }
