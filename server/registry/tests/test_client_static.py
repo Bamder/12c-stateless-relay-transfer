@@ -65,7 +65,10 @@ def test_serves_client_index_and_same_origin_relay_config(tmp_path: Path) -> Non
     assert index.status_code == 200
     assert "client" in index.text
     assert config.status_code == 200
-    assert config.json() == {"registry": {"url": "https://registry.example.com"}}
+    assert config.json() == {
+        "registry": {"url": "https://registry.example.com"},
+        "relay": {"maxBodyBytes": 32 * 1024 * 1024},
+    }
     assert api.status_code == 200
 
 

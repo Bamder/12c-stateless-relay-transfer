@@ -1,12 +1,19 @@
 import {
   createRelayStackFromConfig,
+  decodeSegmentPlaintextBytesV21,
   loadTransferConfigFromUrl,
   loadTwelveC,
   resolveRegistryBaseUrl,
+  resolveRelayMaxBodyBytes,
+  resolveEffectiveWireBlockBytes,
+  selectSegmentCodeForFileSize,
+  V21_WHOLE_FILE_THRESHOLD_BYTES,
+  DEFAULT_RELAY_MAX_BODY_BYTES,
   type LoadTwelveCOptions,
   type RelayStack,
   type TwelveCClient,
   type TransferConfig,
+  type UploadMap,
 } from '@stateless-relay/transfer';
 import { DEFAULT_FILE_TTL_SECONDS } from './file-ttl.js';
 
@@ -19,6 +26,7 @@ export interface ClientRuntime {
   twelveC: TwelveCClient;
   stack: RelayStack;
   registryUrl: string;
+  relayMaxBodyBytes: number;
 }
 
 type CreateTwelveCModuleFactory = NonNullable<LoadTwelveCOptions['createModule']>;
@@ -140,7 +148,21 @@ export async function runCryptoRoundtrip(
         plaintext[i] = i & 0xff;
       }
 
-      const uploads = twelveC.prepareUpload(plaintext, credential);
+      const segmentCode = selectSegmentCodeForFileSize(size);
+      const maxWireBlockBytes = resolveEffectiveWireBlockBytes({
+        fileSizeBytes: size,
+        relayMaxBodyBytes: DEFAULT_RELAY_MAX_BODY_BYTES,
+      });
+      const uploads =
+        size > V21_WHOLE_FILE_THRESHOLD_BYTES
+          ? await prepareUploadStreamingRoundtrip(
+              twelveC,
+              plaintext,
+              credential,
+              segmentCode,
+              maxWireBlockBytes,
+            )
+          : twelveC.prepareUpload(plaintext, credential, '', segmentCode, maxWireBlockBytes);
       const recovered = twelveC.receiveFromUploadMap(credential, uploads);
 
       if (recovered.length !== size) {
@@ -152,9 +174,11 @@ export async function runCryptoRoundtrip(
         }
       }
 
-      const token0 = uploads.values().next().value;
+      const searchCode = credential.slice(0, 6);
+      const token0Key = twelveC.deriveUploadToken(searchCode, 0);
+      const token0 = uploads.get(token0Key);
       if (!token0) {
-        throw new Error('prepareUpload returned empty map');
+        throw new Error(`token0 missing: ${token0Key}`);
       }
       const meta = twelveC.parseSmbEncrypted(credential, token0);
       results.push({
@@ -175,6 +199,36 @@ export async function runCryptoRoundtrip(
   return results;
 }
 
+async function prepareUploadStreamingRoundtrip(
+  twelveC: TwelveCClient,
+  plaintext: Uint8Array,
+  credential: string,
+  segmentCode: number,
+  maxWireBlockBytes: number,
+): Promise<UploadMap> {
+  const session = twelveC.createUploadPrepareSession(
+    credential,
+    'roundtrip.bin',
+    plaintext.length,
+    segmentCode,
+    maxWireBlockBytes,
+  );
+  const segmentBytes = decodeSegmentPlaintextBytesV21(segmentCode);
+
+  for (let offset = 0; offset < plaintext.length; offset += segmentBytes) {
+    const end = Math.min(offset + segmentBytes, plaintext.length);
+    session.feed(plaintext.subarray(offset, end));
+  }
+
+  const uploads: UploadMap = new Map();
+  for (const block of session.takeReadyBlocks()) {
+    uploads.set(block.token, new Uint8Array(block.data));
+  }
+  const token0 = session.finalize();
+  uploads.set(token0.token, new Uint8Array(token0.data));
+  return uploads;
+}
+
 export async function createClientRuntime(
   config: TransferConfig,
 ): Promise<ClientRuntime> {
@@ -184,6 +238,7 @@ export async function createClientRuntime(
     twelveC,
     stack,
     registryUrl: resolveRegistryBaseUrl(config.registry),
+    relayMaxBodyBytes: resolveRelayMaxBodyBytes(config),
   };
 }
 

@@ -10,14 +10,23 @@ import {
 import {
   CREDENTIAL_LENGTH,
   prepareUpload,
+  prepareUploadStreamingWithHashes,
+  V21_WHOLE_FILE_THRESHOLD_BYTES,
   RegistryTokenOccupiedError,
   resolveRegistryBaseUrl,
   uploadPrepared,
   type OccupiedTokenInfo,
   type UploadStatusUpdate,
   type UploadReservationMeta,
+  type DownloadStatusUpdate,
+  type BlockHashEntry,
 } from '@stateless-relay/transfer';
 import type { ClientRuntime } from './runtime.js';
+import {
+  createUploadPrepareWorker,
+  UPLOAD_WASM_BINARY_URL,
+  UPLOAD_WASM_SCRIPT_URL,
+} from './upload-worker-factory.js';
 import {
   bootstrapClientRuntime,
   clearStoredRegistryUrl,
@@ -26,10 +35,15 @@ import {
   saveStoredFileTtlSeconds,
   saveStoredRegistryUrl,
 } from './runtime.js';
-import { CredentialSlotDisplay } from './credential-slots.js';
+import {
+  BREATHING_MIN_MS,
+  BREATHING_MIN_STREAMING_MS,
+  CredentialSlotDisplay,
+} from './credential-slots.js';
 import { renderFileIconForFile, renderFileIconForName } from './file-type-icon.js';
 import { ReceiveCredentialInput } from './receive-credential-input.js';
 import { clearBanner, initBanners, showBanner } from './banner.js';
+import { formatUnknownError } from './format-error.js';
 import {
   clampDurationParts,
   durationPartsFromSeconds,
@@ -73,8 +87,15 @@ interface Elements {
   sendCredentialSlots: HTMLElement;
   copyCredentialBtn: HTMLButtonElement;
   receiveCredentialSlots: HTMLElement;
+  pasteReceiveCredentialBtn: HTMLButtonElement;
   receiveDownloadBtn: HTMLButtonElement;
   receiveDownloadHint: HTMLElement;
+  receiveDownloadRingFill: SVGCircleElement;
+  receiveDownloadProgressHeader: HTMLElement;
+  receiveDownloadStatus: HTMLElement;
+  receiveDownloadSpinner: HTMLElement;
+  receiveDownloadStatusText: HTMLElement;
+  receiveDownloadProgressText: HTMLElement;
   receiveFileBar: HTMLElement;
   receiveFilePending: HTMLElement;
   receiveFileReady: HTMLElement;
@@ -112,9 +133,11 @@ let selectedFile: File | null = null;
 let activePanel: PanelName = 'send';
 let credentialDisplay: CredentialSlotDisplay | null = null;
 let receiveCredentialInput: ReceiveCredentialInput | null = null;
-let receivedFile: { fileName: string; data: Uint8Array } | null = null;
+let receivedFile: { fileName: string; data: Blob } | null = null;
 let receiveDownloading = false;
 let sendInProgress = false;
+/** 加密阶段进度条比例，保证只增不减，避免 UI 来回晃 */
+let sendPrepareProgressRatio = 0;
 
 // ============================================================================
 // 工具函数
@@ -136,6 +159,8 @@ function debounce<T extends (...args: never[]) => void>(
 }
 
 type ReceiveDownloadState = 'idle' | 'ready' | 'downloading' | 'done';
+
+const RECEIVE_DOWNLOAD_RING_LENGTH = 100;
 
 const RECEIVE_DOWNLOAD_LABELS: Record<ReceiveDownloadState, string> = {
   idle: '点击下载',
@@ -184,8 +209,21 @@ function collectElements(): Elements {
     sendCredentialSlots: $('send-credential-slots'),
     copyCredentialBtn: $('copy-credential-btn') as HTMLButtonElement,
     receiveCredentialSlots: $('receive-credential-slots'),
+    pasteReceiveCredentialBtn: $('paste-receive-credential-btn') as HTMLButtonElement,
     receiveDownloadBtn: $('receive-download-btn') as HTMLButtonElement,
     receiveDownloadHint: $('receive-download-hint'),
+    receiveDownloadRingFill: (() => {
+      const node = document.getElementById('receive-download-ring-fill');
+      if (!(node instanceof SVGCircleElement)) {
+        throw new Error('missing element #receive-download-ring-fill');
+      }
+      return node;
+    })(),
+    receiveDownloadProgressHeader: $('receive-download-progress-header'),
+    receiveDownloadStatus: $('receive-download-status'),
+    receiveDownloadSpinner: $('receive-download-spinner'),
+    receiveDownloadStatusText: $('receive-download-status-text'),
+    receiveDownloadProgressText: $('receive-download-progress-text'),
     receiveFileBar: $('receive-file-bar'),
     receiveFilePending: $('receive-file-pending'),
     receiveFileReady: $('receive-file-ready'),
@@ -325,6 +363,21 @@ function formatUploadStatusMessage(
     case 'reading':
       return '正在读取文件';
     case 'preparing':
+      if (
+        status.segmentTotal !== undefined &&
+        status.segmentTotal > 1 &&
+        status.segmentIndex !== undefined &&
+        status.segmentIndex > 0
+      ) {
+        return `正在加密并分块（GCM 段 ${status.segmentIndex} / ${status.segmentTotal}）`;
+      }
+      if (
+        status.bytesFed !== undefined &&
+        status.totalBytes !== undefined &&
+        status.totalBytes > 0
+      ) {
+        return '正在加密并分块';
+      }
       return '正在加密并分块';
     case 'hashing':
       return status.total > 1
@@ -338,11 +391,11 @@ function formatUploadStatusMessage(
       }
       if (status.completed === 0 && status.inFlight > 0) {
         return status.total > 1
-          ? `正在上传（${status.inFlight} / ${status.total} 块进行中）`
+          ? `正在上传首批数据（0 / ${status.total} 已完成，${status.inFlight} 路已发出）`
           : '正在上传';
       }
       return status.total > 1
-        ? `正在上传（${status.completed} / ${status.total} 块已完成）`
+        ? `正在上传（${status.completed} / ${status.total} 块已完成${status.inFlight > 0 ? `，${status.inFlight} 路进行中` : ''}）`
         : '正在上传';
     default:
       return '正在处理';
@@ -355,14 +408,44 @@ function setSendUploadStatus(
   if (!status) {
     el.sendUploadStatus.classList.add('hidden');
     el.sendProgressTrack.classList.remove('indeterminate');
+    sendPrepareProgressRatio = 0;
     return;
   }
 
   el.sendUploadStatus.classList.remove('hidden');
   el.sendUploadStatusText.textContent = formatUploadStatusMessage(status);
 
+  if (
+    status.phase === 'preparing' &&
+    status.bytesFed !== undefined &&
+    status.totalBytes !== undefined &&
+    status.totalBytes > 0
+  ) {
+    el.sendProgressText.textContent = `${formatBytes(status.bytesFed)} / ${formatBytes(status.totalBytes)}`;
+    el.sendProgressTrack.classList.remove('indeterminate');
+    const ratio = Math.max(
+      sendPrepareProgressRatio,
+      status.bytesFed / status.totalBytes,
+    );
+    sendPrepareProgressRatio = ratio;
+    el.sendProgressBar.style.width = `${Math.max(4, Math.round(ratio * 100))}%`;
+    return;
+  }
+
+  if (status.phase === 'hashing' && status.total > 0) {
+    el.sendProgressText.textContent = `${status.index} / ${status.total}`;
+    el.sendProgressTrack.classList.remove('indeterminate');
+    const ratio = status.index / status.total;
+    el.sendProgressBar.style.width = `${Math.max(4, Math.round(ratio * 100))}%`;
+    return;
+  }
+
   if (status.phase === 'uploading') {
-    el.sendProgressText.textContent = `${status.completed} / ${status.total}`;
+    sendPrepareProgressRatio = 0;
+    el.sendProgressText.textContent =
+      status.inFlight > 0
+        ? `${status.completed} / ${status.total}（${status.inFlight} 进行中）`
+        : `${status.completed} / ${status.total}`;
     if (status.completed >= status.total) {
       el.sendProgressTrack.classList.remove('indeterminate');
       el.sendProgressBar.style.width = '100%';
@@ -447,12 +530,19 @@ async function handleSend(): Promise<void> {
   updateSendControls();
   display.startBreathing();
 
-  const bytesPromise = selectedFile
-    .arrayBuffer()
-    .then((buffer) => new Uint8Array(buffer));
-  setSendUploadStatus({ phase: 'reading' });
-  await display.enterReelWhenReady(bytesPromise);
-  const bytes = await bytesPromise;
+  const useStreamingUpload =
+    selectedFile.size > V21_WHOLE_FILE_THRESHOLD_BYTES;
+  const bytesPromise = useStreamingUpload
+    ? Promise.resolve(selectedFile.size)
+    : selectedFile.arrayBuffer().then((buffer) => new Uint8Array(buffer));
+  if (!useStreamingUpload) {
+    setSendUploadStatus({ phase: 'reading' });
+  }
+  await display.enterReelWhenReady(
+    bytesPromise,
+    useStreamingUpload ? BREATHING_MIN_STREAMING_MS : BREATHING_MIN_MS,
+  );
+  const bytes = useStreamingUpload ? null : await bytesPromise;
 
   const maxAttempts = DEFAULT_MAX_RESERVATION_ATTEMPTS;
   let lastOccupiedTokens: OccupiedTokenInfo[] = [];
@@ -462,13 +552,39 @@ async function handleSend(): Promise<void> {
       const credential = generateCredential(getEffectiveCredentialStyle());
 
       try {
-        setSendUploadStatus({ phase: 'preparing' });
-        const uploads = prepareUpload(
-          bytes,
-          credential,
-          client.twelveC,
-          selectedFile.name,
-        );
+        let uploads: UploadMap;
+        let blockHashes: BlockHashEntry[] | undefined;
+        const wirePrepareOptions = {
+          relayMaxBodyBytes: client.relayMaxBodyBytes,
+          createUploadWorker: createUploadPrepareWorker,
+          wasmScriptUrl: UPLOAD_WASM_SCRIPT_URL,
+          wasmBinaryUrl: UPLOAD_WASM_BINARY_URL,
+        };
+        if (useStreamingUpload) {
+          const prepared = await prepareUploadStreamingWithHashes(
+            selectedFile,
+            credential,
+            client.twelveC,
+            selectedFile.name,
+            undefined,
+            (status) => setSendUploadStatus(status),
+            wirePrepareOptions,
+          );
+          uploads = prepared.uploads;
+          blockHashes = prepared.blockHashes;
+        } else {
+          setSendUploadStatus({ phase: 'preparing' });
+          uploads = prepareUpload(
+            bytes!,
+            credential,
+            client.twelveC,
+            selectedFile.name,
+            undefined,
+            {
+              relayMaxBodyBytes: client.relayMaxBodyBytes,
+            },
+          );
+        }
         await display.revealSequential(credential);
         el.copyCredentialBtn.disabled = false;
 
@@ -479,6 +595,7 @@ async function handleSend(): Promise<void> {
           {
             registry: client.stack.registry,
             ttlSeconds: getEffectiveFileTtlSeconds(),
+            precomputedBlockHashes: blockHashes,
           },
           (status: UploadStatusUpdate) => {
             setSendUploadStatus(status);
@@ -518,7 +635,7 @@ async function handleSend(): Promise<void> {
     throw new UploadTokenReservationExhaustedError(maxAttempts, lastOccupiedTokens);
   } catch (error) {
     setSendUploadStatus(null);
-    const message = error instanceof Error ? error.message : String(error);
+    const message = formatUnknownError(error);
     showBanner(el.sendError, message);
     if (!display.getValue()) {
       display.reset();
@@ -533,10 +650,8 @@ async function handleSend(): Promise<void> {
 // 接收面板 - 文件下载与保存
 // ============================================================================
 
-function saveBlob(filename: string, data: Uint8Array): void {
-  const copy = new Uint8Array(data);
-  const blob = new Blob([copy], { type: 'application/octet-stream' });
-  const url = URL.createObjectURL(blob);
+function saveBlob(filename: string, data: Blob): void {
+  const url = URL.createObjectURL(data);
   const anchor = document.createElement('a');
   anchor.href = url;
   anchor.download = filename;
@@ -555,6 +670,185 @@ function resetReceiveFileBar(): void {
   el.receiveFileIcon.replaceChildren();
   el.receiveFileName.textContent = '';
   el.receiveFileSize.textContent = '';
+}
+
+function formatDownloadStatusMessage(status: DownloadStatusUpdate): string {
+  switch (status.phase) {
+    case 'resolving_initial': {
+      const from = status.fromIndex + 1;
+      const to = status.toIndex;
+      if (to <= from) {
+        return `正在定位初始接收窗口（共 ${status.total} 块，包含SMB）`;
+      }
+      return `正在定位初始接收窗口（第 ${from}–${to} 块，共 ${status.total} 块，包含SMB）`;
+    }
+    case 'resolving_window': {
+      const from = status.fromIndex + 1;
+      const to = status.toIndex;
+      if (to <= from) {
+        return `正在定位接收窗口（共 ${status.total} 块）`;
+      }
+      return `正在定位接收窗口（第 ${from}–${to} 块，共 ${status.total} 块）`;
+    }
+    case 'awaiting_metadata_block':
+      return '块并行传输中';
+    case 'waiting_metadata_block':
+      if (status.reason === 'registry') {
+        return '等待发送方上传（首块尚未就绪，将自动继续）';
+      }
+      return '首块传输不稳定，正在自动重试';
+    case 'parsing_metadata':
+      return '正在解析 SMB';
+    case 'downloading':
+      if (status.completed >= status.total) {
+        return '下载完成';
+      }
+      if (status.completed === 1 && status.total > 1) {
+        return `正在下载（SMB 已就绪，${status.completed} / ${status.total} 块已完成）`;
+      }
+      return status.total > 1
+        ? `正在下载（${status.completed} / ${status.total} 块已完成）`
+        : '正在下载';
+    case 'decrypting':
+      return '正在解密文件内容';
+    default:
+      return '正在处理';
+  }
+}
+
+function isPreBlockProgressPhase(status: DownloadStatusUpdate): boolean {
+  return (
+    status.phase === 'resolving_initial' ||
+    status.phase === 'awaiting_metadata_block' ||
+    status.phase === 'waiting_metadata_block' ||
+    status.phase === 'parsing_metadata'
+  );
+}
+
+function setReceiveDownloadStatus(status: DownloadStatusUpdate | null): void {
+  if (!status) {
+    el.receiveDownloadProgressHeader.classList.add('hidden');
+    el.receiveDownloadSpinner.classList.add('hidden');
+    el.receiveDownloadStatusText.textContent = '';
+    return;
+  }
+
+  el.receiveDownloadProgressHeader.classList.remove('hidden');
+  el.receiveDownloadSpinner.classList.remove('hidden');
+  el.receiveDownloadStatusText.textContent = formatDownloadStatusMessage(status);
+}
+
+let receiveDownloadStatusRank = 0;
+let receiveDownloadBlockProgress: { completed: number; total: number } | null =
+  null;
+let receiveDownloadBlockProgressLocked = false;
+
+function paintReceiveDownloadBlockProgress(): void {
+  if (receiveDownloadBlockProgress === null) {
+    return;
+  }
+  const { completed, total } = receiveDownloadBlockProgress;
+  el.receiveDownloadProgressText.classList.remove('hidden');
+  el.receiveDownloadProgressText.textContent = `${completed} / ${total}`;
+  el.receiveDownloadRingFill.style.strokeDasharray = '';
+  const ratio = total > 0 ? completed / total : 0;
+  el.receiveDownloadRingFill.style.strokeDashoffset = String(
+    RECEIVE_DOWNLOAD_RING_LENGTH * (1 - ratio),
+  );
+}
+
+function rememberReceiveDownloadBlockProgress(
+  completed: number,
+  total: number,
+): void {
+  receiveDownloadBlockProgress = { completed, total };
+  receiveDownloadBlockProgressLocked = true;
+}
+
+const RECEIVE_DOWNLOAD_PHASE_RANK: Record<DownloadStatusUpdate['phase'], number> =
+  {
+    resolving_initial: 10,
+    awaiting_metadata_block: 20,
+    waiting_metadata_block: 25,
+    parsing_metadata: 30,
+    resolving_window: 35,
+    downloading: 40,
+    decrypting: 50,
+  };
+
+function setReceiveDownloadProgress(status: DownloadStatusUpdate | null): void {
+  if (status === null) {
+    receiveDownloadStatusRank = 0;
+    receiveDownloadBlockProgress = null;
+    receiveDownloadBlockProgressLocked = false;
+    el.receiveDownloadProgressHeader.classList.add('hidden');
+    el.receiveDownloadSpinner.classList.add('hidden');
+    el.receiveDownloadStatusText.textContent = '';
+    el.receiveDownloadProgressText.classList.add('hidden');
+    el.receiveDownloadProgressText.textContent = '';
+    el.receiveDownloadRingFill.style.strokeDashoffset = '0';
+    return;
+  }
+
+  if (status.phase === 'resolving_window') {
+    if (!receiveDownloadBlockProgressLocked) {
+      receiveDownloadStatusRank = Math.max(
+        receiveDownloadStatusRank,
+        RECEIVE_DOWNLOAD_PHASE_RANK.resolving_window,
+      );
+    }
+    el.receiveDownloadBtn.classList.remove(
+      'receive-download-trigger--ring-indeterminate',
+    );
+    setReceiveDownloadStatus(status);
+    if (receiveDownloadBlockProgressLocked) {
+      paintReceiveDownloadBlockProgress();
+    }
+    return;
+  }
+
+  const rank = RECEIVE_DOWNLOAD_PHASE_RANK[status.phase];
+  if (rank < receiveDownloadStatusRank) {
+    if (receiveDownloadBlockProgressLocked) {
+      paintReceiveDownloadBlockProgress();
+    }
+    return;
+  }
+  receiveDownloadStatusRank = rank;
+
+  if (status.phase === 'downloading') {
+    rememberReceiveDownloadBlockProgress(status.completed, status.total);
+  }
+
+  el.receiveDownloadBtn.classList.remove('receive-download-trigger--ring-indeterminate');
+  setReceiveDownloadStatus(status);
+
+  if (receiveDownloadBlockProgressLocked) {
+    paintReceiveDownloadBlockProgress();
+    return;
+  }
+
+  if (isPreBlockProgressPhase(status)) {
+    el.receiveDownloadProgressText.classList.add('hidden');
+    el.receiveDownloadProgressText.textContent = '';
+    el.receiveDownloadRingFill.style.strokeDasharray = '';
+    el.receiveDownloadRingFill.style.strokeDashoffset = '';
+    el.receiveDownloadBtn.classList.add('receive-download-trigger--ring-indeterminate');
+    return;
+  }
+
+  el.receiveDownloadRingFill.style.strokeDasharray = '';
+
+  if (status.phase === 'downloading') {
+    paintReceiveDownloadBlockProgress();
+    return;
+  }
+
+  if (status.phase === 'decrypting') {
+    el.receiveDownloadProgressText.classList.remove('hidden');
+    el.receiveDownloadProgressText.textContent = `${status.total} / ${status.total}`;
+    el.receiveDownloadRingFill.style.strokeDashoffset = '0';
+  }
 }
 
 function setReceiveDownloadVisual(state: ReceiveDownloadState): void {
@@ -585,7 +879,7 @@ function updateReceiveDownloadButton(): void {
   el.receiveDownloadBtn.disabled = !complete;
 }
 
-function showReceivedFile(fileName: string, data: Uint8Array): void {
+function showReceivedFile(fileName: string, data: Blob): void {
   receivedFile = { fileName, data };
   el.receiveFileBar.classList.remove('receive-file-bar--pending');
   el.receiveFileBar.classList.add('receive-file-bar--ready', 'is-clickable');
@@ -594,7 +888,7 @@ function showReceivedFile(fileName: string, data: Uint8Array): void {
   el.receiveFileSaveHint.classList.remove('hidden');
   renderFileIconForName(el.receiveFileIcon, fileName);
   el.receiveFileName.textContent = fileName;
-  el.receiveFileSize.textContent = formatBytes(data.byteLength);
+  el.receiveFileSize.textContent = formatBytes(data.size);
   updateReceiveDownloadButton();
 }
 
@@ -621,13 +915,18 @@ async function handleReceiveDownload(): Promise<void> {
     const received = await receiveFile(credential, {
       twelveC: client.twelveC,
       receiveTransport: client.stack.receiveTransport,
+    }, {
+      relayMaxBodyBytes: client.relayMaxBodyBytes,
+      onStatus: (status) => setReceiveDownloadProgress(status),
     });
     showReceivedFile(received.fileName, received.data);
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    console.error('[receive] download failed:', error);
+    const message = formatUnknownError(error);
     showBanner(el.receiveError, message);
   } finally {
     receiveDownloading = false;
+    setReceiveDownloadProgress(null);
     updateReceiveDownloadButton();
   }
 }
@@ -777,7 +1076,7 @@ async function handleSaveSettings(): Promise<void> {
       switchPanel('settings');
     }
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = formatUnknownError(error);
     showBanner(el.settingsError, message);
     showApp();
   }
@@ -791,6 +1090,24 @@ async function handleResetSettings(): Promise<void> {
   const config = await loadEffectiveConfig();
   el.registryUrlInput.value = resolveRegistryBaseUrl(config.registry);
   showBanner(el.settingsInfo, '已恢复默认（尚未重连，请点击保存并重连）。');
+}
+
+async function pasteReceiveCredential(): Promise<void> {
+  clearBanner(el.receiveError);
+  try {
+    const text = await navigator.clipboard.readText();
+    if (!text.trim()) {
+      showBanner(el.receiveError, '剪贴板为空，请先在发送页复制凭证');
+      return;
+    }
+    receiveCredentialInput?.applyCredential(text);
+    if (!receiveCredentialInput?.isComplete()) {
+      showBanner(el.receiveError, `剪贴板内容不足 ${CREDENTIAL_LENGTH} 位有效凭证字符`);
+      return;
+    }
+  } catch {
+    showBanner(el.receiveError, '无法读取剪贴板，请在凭证框内 Ctrl+V 粘贴');
+  }
 }
 
 async function copyCredential(): Promise<void> {
@@ -894,6 +1211,10 @@ function bindEvents(): void {
   el.copyCredentialBtn.addEventListener('click', () => {
     void copyCredential();
   });
+
+  el.pasteReceiveCredentialBtn.addEventListener('click', () => {
+    void pasteReceiveCredential();
+  });
 }
 
 export async function startApp(): Promise<void> {
@@ -903,6 +1224,9 @@ export async function startApp(): Promise<void> {
   receiveCredentialInput = new ReceiveCredentialInput(el.receiveCredentialSlots);
   receiveCredentialInput.onChange(() => {
     resetReceiveFileBar();
+    if (!receiveDownloading) {
+      setReceiveDownloadProgress(null);
+    }
     updateReceiveDownloadButton();
     clearBanner(el.receiveError);
   });
@@ -918,7 +1242,7 @@ export async function startApp(): Promise<void> {
     setBootProgress(1, '就绪');
     showApp();
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = formatUnknownError(error);
     el.bootStatus.textContent = `启动失败：${message}`;
     el.bootProgressBar.style.width = '0%';
   }

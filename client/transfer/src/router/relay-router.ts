@@ -1,5 +1,5 @@
 import type { RelayEndpoint } from '../types.js';
-import { lookupRelay, isResolvableRegistryRecord, type RegistryClient } from './registry-client.js';
+import { lookupRelay, isResolvableRegistryRecord, TokenPlacementExpiredError, type RegistryClient } from './registry-client.js';
 import { endpointFromRegistryRecord } from './endpoints-from-registry.js';
 
 export type RelayEndpointMap = Map<string, RelayEndpoint>;
@@ -74,6 +74,9 @@ export class RegistryRelayRouter implements RelayRouter {
 
     for (const token of unique) {
       const record = records.get(token);
+      if (record?.resolveStatus === 'expired') {
+        throw new TokenPlacementExpiredError(token);
+      }
       if (record === undefined || !isResolvableRegistryRecord(record)) {
         continue;
       }

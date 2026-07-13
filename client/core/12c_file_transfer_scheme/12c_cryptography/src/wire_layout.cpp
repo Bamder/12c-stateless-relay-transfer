@@ -2,6 +2,7 @@
 
 #include "twelve_c/constants.hpp"
 #include "twelve_c/smb.hpp"
+#include "twelve_c/segment.hpp"
 #include "twelve_c/types.hpp"
 
 #include <algorithm>
@@ -42,26 +43,27 @@ std::size_t ceil_div(const std::size_t numerator, const std::size_t denominator)
     return (numerator + denominator - 1) / denominator;
 }
 
-std::size_t min_wire_block_size(const std::size_t total_wire) {
+std::size_t min_wire_block_size(
+    const std::size_t total_wire,
+    const std::size_t max_wire_block_bytes) {
     return std::min(
-        kMaxWireBlockBytes,
+        max_wire_block_bytes,
         total_wire / kMinBlockSizeDivisor);
 }
 
 std::size_t max_token_count(
     const std::size_t total_wire,
-    const std::size_t sm_enc_bytes) {
+    const std::size_t sm_enc_bytes,
+    const std::size_t max_wire_block_bytes) {
     if (total_wire < sm_enc_bytes) {
         throw std::logic_error("total wire smaller than encrypted SMB");
     }
 
-    const std::size_t min_block = min_wire_block_size(total_wire);
+    const std::size_t min_block = min_wire_block_size(total_wire, max_wire_block_bytes);
     if (min_block == 0) {
         return 1;
     }
 
-    // 块 <= kMaxWireBlockBytes => m >= ceil(total / kMaxWireBlockBytes)
-    // 块 >= B_min => m <= floor(total / B_min)
     const std::size_t by_min_block = total_wire / min_block;
     const std::size_t by_smb_floor = total_wire / sm_enc_bytes;
     return std::max<std::size_t>(1, std::min(by_min_block, by_smb_floor));
@@ -70,9 +72,10 @@ std::size_t max_token_count(
 std::size_t min_token_count(
     const std::size_t total_wire,
     const std::size_t ciphertext_length,
-    const std::size_t max_tokens) {
+    const std::size_t max_tokens,
+    const std::size_t max_wire_block_bytes) {
     const std::size_t relay_min =
-        ceil_div(total_wire, kMaxWireBlockBytes);
+        ceil_div(total_wire, max_wire_block_bytes);
     const std::size_t ref_min =
         ceil_div(ciphertext_length, kWireBlockRef);
 
@@ -89,12 +92,17 @@ std::size_t min_token_count(
 std::uint32_t choose_num_tokens(
     const std::size_t total_wire,
     const std::size_t ciphertext_length,
-    const std::size_t sm_enc_bytes) {
-    const std::size_t max_m = max_token_count(total_wire, sm_enc_bytes);
+    const std::size_t sm_enc_bytes,
+    const std::size_t max_wire_block_bytes) {
+    const std::size_t max_m = max_token_count(
+        total_wire,
+        sm_enc_bytes,
+        max_wire_block_bytes);
     const std::size_t min_m = min_token_count(
         total_wire,
         ciphertext_length,
-        max_m);
+        max_m,
+        max_wire_block_bytes);
 
     if (max_m < min_m) {
         throw std::logic_error("wire layout: token range empty");
@@ -107,10 +115,10 @@ std::uint32_t choose_num_tokens(
             continue;
         }
         const std::size_t block_size = total_wire / candidate;
-        if (block_size < min_wire_block_size(total_wire)) {
+        if (block_size < min_wire_block_size(total_wire, max_wire_block_bytes)) {
             continue;
         }
-        if (block_size > kMaxWireBlockBytes) {
+        if (block_size > max_wire_block_bytes) {
             continue;
         }
         return static_cast<std::uint32_t>(candidate);
@@ -121,10 +129,10 @@ std::uint32_t choose_num_tokens(
             continue;
         }
         const std::size_t block_size = total_wire / candidate;
-        if (block_size < min_wire_block_size(total_wire)) {
+        if (block_size < min_wire_block_size(total_wire, max_wire_block_bytes)) {
             continue;
         }
-        if (block_size > kMaxWireBlockBytes) {
+        if (block_size > max_wire_block_bytes) {
             continue;
         }
         return static_cast<std::uint32_t>(candidate);
@@ -133,9 +141,13 @@ std::uint32_t choose_num_tokens(
     throw std::logic_error("wire layout failed to choose num_tokens");
 }
 
-WireLayout compute_wire_layout_exact(const std::size_t plaintext_length) {
+WireLayout compute_wire_layout_exact(
+    const std::size_t plaintext_length,
+    const std::uint16_t segment_code,
+    const std::size_t max_wire_block_bytes) {
     WireLayout layout;
-    layout.ciphertext_length = plaintext_length + kGcmEnvelopeBytes;
+    layout.ciphertext_length =
+        ciphertext_length_from_plaintext(plaintext_length, segment_code);
 
     const std::size_t sm_enc_bytes = sm_enc_size();
     layout.total_wire_bytes = sm_enc_bytes + layout.ciphertext_length;
@@ -143,7 +155,8 @@ WireLayout compute_wire_layout_exact(const std::size_t plaintext_length) {
     layout.num_tokens = choose_num_tokens(
         layout.total_wire_bytes,
         layout.ciphertext_length,
-        sm_enc_bytes);
+        sm_enc_bytes,
+        max_wire_block_bytes);
 
     if (layout.total_wire_bytes % layout.num_tokens != 0) {
         throw std::logic_error("wire layout failed to partition total wire bytes");
@@ -155,10 +168,11 @@ WireLayout compute_wire_layout_exact(const std::size_t plaintext_length) {
     if (layout.wire_block_size < sm_enc_bytes) {
         throw std::logic_error("wire block smaller than encrypted SMB");
     }
-    if (layout.wire_block_size > kMaxWireBlockBytes) {
+    if (layout.wire_block_size > max_wire_block_bytes) {
         throw std::logic_error("wire block exceeds relay max body size");
     }
-    if (layout.wire_block_size < min_wire_block_size(layout.total_wire_bytes)) {
+    if (layout.wire_block_size <
+        min_wire_block_size(layout.total_wire_bytes, max_wire_block_bytes)) {
         throw std::logic_error("wire block smaller than minimum block size");
     }
 
@@ -174,32 +188,28 @@ WireLayout compute_wire_layout_exact(const std::size_t plaintext_length) {
     return layout;
 }
 
-}  // namespace
-
-std::size_t sm_enc_size() {
-    static const bool verified = []() {
-        verify_sm_schema_size();
-        return true;
-    }();
-    (void)verified;
-    return kSmEncBytes;
-}
-
 std::size_t next_layout_padding(
     const std::size_t plaintext_length,
-    const std::size_t sm_enc_bytes) {
-    const std::size_t ciphertext_length = plaintext_length + kGcmEnvelopeBytes;
+    const std::size_t sm_enc_bytes,
+    const std::uint16_t segment_code,
+    const std::size_t max_wire_block_bytes) {
+    const std::size_t ciphertext_length =
+        ciphertext_length_from_plaintext(plaintext_length, segment_code);
     const std::size_t total_wire = sm_enc_bytes + ciphertext_length;
 
-    const std::size_t max_m = max_token_count(total_wire, sm_enc_bytes);
+    const std::size_t max_m = max_token_count(
+        total_wire,
+        sm_enc_bytes,
+        max_wire_block_bytes);
     const std::size_t min_m = min_token_count(
         total_wire,
         ciphertext_length,
-        max_m);
+        max_m,
+        max_wire_block_bytes);
 
     if (min_m > max_m) {
         const std::size_t target_m = min_m;
-        const std::size_t aligned_total = target_m * kMaxWireBlockBytes;
+        const std::size_t aligned_total = target_m * max_wire_block_bytes;
         if (total_wire < aligned_total) {
             return aligned_total - total_wire;
         }
@@ -207,12 +217,12 @@ std::size_t next_layout_padding(
         return remainder == 0 ? 1 : (target_m - remainder);
     }
 
-    const std::size_t min_block = min_wire_block_size(total_wire);
+    const std::size_t min_block = min_wire_block_size(total_wire, max_wire_block_bytes);
     for (std::size_t candidate = min_m; candidate <= max_m; ++candidate) {
         const std::size_t remainder = total_wire % candidate;
         if (remainder == 0) {
             const std::size_t block_size = total_wire / candidate;
-            if (block_size >= min_block && block_size <= kMaxWireBlockBytes) {
+            if (block_size >= min_block && block_size <= max_wire_block_bytes) {
                 return 0;
             }
         }
@@ -224,18 +234,57 @@ std::size_t next_layout_padding(
     return 1;
 }
 
-WireLayout compute_wire_layout(const std::size_t plaintext_length) {
+}  // namespace
+
+std::size_t sm_enc_size() {
+    static const bool verified = []() {
+        verify_sm_schema_size();
+        return true;
+    }();
+    (void)verified;
+    return kSmEncBytes;
+}
+
+void validate_max_wire_block_bytes(const std::size_t max_wire_block_bytes) {
+    if (max_wire_block_bytes < sm_enc_size()) {
+        throw std::invalid_argument(
+            "max_wire_block_bytes smaller than encrypted SMB size");
+    }
+    if (max_wire_block_bytes > kRelayMaxBodyBytesCap) {
+        throw std::invalid_argument("max_wire_block_bytes exceeds implementation cap");
+    }
+}
+
+std::size_t max_plaintext_padding_for_layout(
+    const std::size_t max_wire_block_bytes) {
+    // 规范默认 16 MiB；块上限更大时，单次对齐最坏约需一整块填充。
+    return std::max(kMaxPlaintextPaddingForWireLayout, max_wire_block_bytes);
+}
+
+WireLayout compute_wire_layout(
+    const std::size_t plaintext_length,
+    const std::uint16_t segment_code,
+    const std::size_t max_wire_block_bytes) {
+    validate_segment_code_v21(segment_code);
+    validate_max_wire_block_bytes(max_wire_block_bytes);
+
+    const std::size_t padding_limit =
+        max_plaintext_padding_for_layout(max_wire_block_bytes);
     std::size_t padding = 0;
-    while (padding <= kMaxPlaintextPaddingForWireLayout) {
+    while (padding <= padding_limit) {
         try {
-            WireLayout layout =
-                compute_wire_layout_exact(plaintext_length + padding);
+            WireLayout layout = compute_wire_layout_exact(
+                plaintext_length + padding,
+                segment_code,
+                max_wire_block_bytes);
             layout.plaintext_padding = padding;
             return layout;
         } catch (const std::logic_error&) {
             const std::size_t step = next_layout_padding(
                 plaintext_length + padding,
-                sm_enc_size());
+                sm_enc_size(),
+                segment_code,
+                max_wire_block_bytes);
             if (step == 0) {
                 break;
             }

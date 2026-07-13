@@ -46,7 +46,11 @@ def request_public_origin(request: Request) -> str:
     return str(request.base_url).rstrip("/")
 
 
-def mount_client_static(app: FastAPI, static_dir: Path | None) -> bool:
+def mount_client_static(
+    app: FastAPI,
+    static_dir: Path | None,
+    max_body_bytes: int,
+) -> bool:
     dist_ready = client_dist_ready(static_dir)
 
     if dist_ready and static_dir is not None:
@@ -54,7 +58,10 @@ def mount_client_static(app: FastAPI, static_dir: Path | None) -> bool:
         @app.get("/relay.config.json")
         async def embedded_relay_config(request: Request) -> JSONResponse:
             return JSONResponse(
-                content={"registry": {"url": request_public_origin(request)}},
+                content={
+                    "registry": {"url": request_public_origin(request)},
+                    "relay": {"maxBodyBytes": max_body_bytes},
+                },
             )
 
         app.mount(

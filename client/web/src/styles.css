@@ -740,6 +740,20 @@ input[type="file"] {
   background: #f0f9ff;
   color: var(--accent);
   box-shadow: var(--focus-ring);
+  /* 主线程被 WASM 占用时仍保持视觉滚动感（JS 换字可能暂停） */
+  animation: credential-reel-pulse 0.55s ease-in-out infinite;
+}
+
+@keyframes credential-reel-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  50% {
+    opacity: 0.82;
+    transform: translateY(-1px) scale(1.02);
+  }
 }
 
 .credential-slot--waiting {
@@ -809,32 +823,197 @@ input[type="file"] {
   margin-bottom: 0.5rem;
 }
 
+.receive-credential-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-bottom: 0.65rem;
+}
+
 .receive-credential-title {
   display: block;
-  text-align: center;
-  margin-bottom: 0.65rem;
+  text-align: left;
+  margin-bottom: 0;
 }
 
 .receive-flow {
   display: flex;
   flex-direction: column;
-  align-items: center;
-  gap: 0.35rem;
+  align-items: stretch;
+  gap: 0.45rem;
   margin-top: 0.75rem;
+  width: 100%;
+}
+
+.receive-file-area {
+  align-self: stretch;
+  width: 100%;
+}
+
+.receive-download-status-slot {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  max-width: calc(100% - 5.5rem);
+  pointer-events: none;
+}
+
+.receive-download-status-slot.hidden {
+  display: none;
+}
+
+.receive-download-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+.receive-download-spinner.hidden {
+  display: none;
+}
+
+.receive-download-spinner {
+  flex-shrink: 0;
+  width: 1rem;
+  height: 1rem;
+  border: 2px solid rgba(2, 132, 199, 0.2);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: send-upload-spin 0.75s linear infinite;
+}
+
+.receive-download-status-text {
+  font-size: 0.8rem;
+  color: var(--muted);
+  line-height: 1.35;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.receive-download-row {
+  position: relative;
+  align-self: stretch;
+  width: 100%;
+  min-height: 3.5rem;
+}
+
+.receive-download-progress-text {
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 0.9rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--ok);
+  line-height: 1.2;
+  min-width: 4.5ch;
+  white-space: nowrap;
+}
+
+.receive-download-progress-text.hidden {
+  display: none;
 }
 
 .receive-download-trigger {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 0.25rem;
-  width: auto;
-  margin: 0 auto;
-  padding: 0.5rem 0.75rem;
+  display: block;
+  position: relative;
+  width: 100%;
+  min-height: inherit;
+  margin: 0;
+  padding: 0.25rem 0;
   border: none;
   background: transparent;
   cursor: pointer;
+}
+
+.receive-download-visual {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 3.25rem;
+  height: 3.25rem;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.receive-download-ring-host {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+.receive-download-ring {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 1;
+  pointer-events: none;
+  transform: rotate(-90deg);
+  transform-origin: 50% 50%;
+}
+
+.receive-download-ring-track,
+.receive-download-ring-fill {
+  fill: none;
+  stroke-width: 4;
+  stroke-linecap: round;
+}
+
+.receive-download-ring-track {
+  stroke: var(--progress-track);
+}
+
+.receive-download-ring-fill {
+  stroke: var(--receive-ring-idle, #c8cdd3);
+  stroke-dasharray: 100;
+  stroke-dashoffset: 0;
+  transition: stroke 0.2s ease, stroke-dashoffset 0.15s ease;
+}
+
+.receive-download-trigger--downloading .receive-download-ring-fill,
+.receive-download-trigger--ring-indeterminate .receive-download-ring-fill {
+  stroke: var(--ok);
+}
+
+.receive-download-trigger--done .receive-download-ring-fill {
+  stroke: var(--ok);
+  stroke-dashoffset: 0;
+}
+
+.receive-download-trigger--ring-indeterminate .receive-download-ring {
+  animation: receive-ring-spin 1s linear infinite;
+}
+
+.receive-download-trigger--ring-indeterminate .receive-download-ring-fill {
+  stroke-dasharray: 28 72;
+  stroke-dashoffset: 0;
+  transition: stroke 0.2s ease;
+}
+
+@keyframes receive-ring-spin {
+  from {
+    transform: rotate(-90deg);
+  }
+  to {
+    transform: rotate(270deg);
+  }
+}
+
+.receive-download-ring-inner {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .receive-download-trigger--idle:disabled,
@@ -852,33 +1031,34 @@ input[type="file"] {
 }
 
 .receive-download-trigger--ready:not(:disabled):hover .receive-download-arrow {
-  transform: translateY(2px);
+  transform: translateY(5px);
 }
 
 .receive-download-arrow {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 3rem;
-  height: 3rem;
+  width: 2rem;
+  height: 2rem;
   flex-shrink: 0;
-}
-
-.receive-download-trigger--ready .receive-download-arrow {
-  transition: transform 0.15s ease;
+  transform: translateY(3px);
 }
 
 .receive-download-trigger--downloading .receive-download-arrow {
   animation: receive-arrow-bounce 0.9s ease-in-out infinite;
 }
 
+.receive-download-trigger--ready .receive-download-arrow {
+  transition: transform 0.15s ease;
+}
+
 @keyframes receive-arrow-bounce {
   0%,
   100% {
-    transform: translateY(-5px);
+    transform: translateY(-2px);
   }
   50% {
-    transform: translateY(5px);
+    transform: translateY(8px);
   }
 }
 
@@ -899,11 +1079,16 @@ input[type="file"] {
 }
 
 .receive-download-hint {
-  font-size: 0.85rem;
+  position: absolute;
+  left: calc(50% + 1.85rem);
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 0.9rem;
   color: var(--text);
   line-height: 1.2;
-  text-align: center;
+  white-space: nowrap;
   transition: color 0.2s ease;
+  pointer-events: none;
 }
 
 .receive-download-trigger--ready .receive-download-hint {

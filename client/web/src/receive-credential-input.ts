@@ -49,8 +49,7 @@ export class ReceiveCredentialInput {
       input.addEventListener('paste', (event) => {
         event.preventDefault();
         const text = event.clipboardData?.getData('text') ?? '';
-        this.applyText(text, index);
-        this.notifyChange();
+        this.applyCredential(text);
       });
 
       container.appendChild(input);
@@ -68,6 +67,28 @@ export class ReceiveCredentialInput {
 
   isComplete(): boolean {
     return this.getValue().length === CREDENTIAL_LENGTH;
+  }
+
+  /** 从剪贴板或外部字符串填入凭证（忽略空白与非法字符，始终从第 1 位起填）。 */
+  applyCredential(text: string): void {
+    let collected = '';
+    for (const char of text.replace(/\s/g, '')) {
+      if (!CREDENTIAL_CHAR.test(char)) {
+        continue;
+      }
+      collected += char;
+      if (collected.length >= CREDENTIAL_LENGTH) {
+        break;
+      }
+    }
+
+    for (let index = 0; index < CREDENTIAL_LENGTH; index++) {
+      this.inputs[index]!.value = collected[index] ?? '';
+    }
+
+    const focusIndex = Math.min(collected.length, CREDENTIAL_LENGTH - 1);
+    this.inputs[focusIndex]?.focus();
+    this.notifyChange();
   }
 
   reset(): void {
@@ -100,20 +121,4 @@ export class ReceiveCredentialInput {
     input.value = char;
   }
 
-  private applyText(text: string, startIndex: number): void {
-    const chars = text.replace(/\s/g, '').slice(0, CREDENTIAL_LENGTH - startIndex);
-    for (let offset = 0; offset < chars.length; offset++) {
-      const char = chars[offset]!;
-      if (!CREDENTIAL_CHAR.test(char)) {
-        continue;
-      }
-      const input = this.inputs[startIndex + offset];
-      if (!input) {
-        break;
-      }
-      input.value = char;
-    }
-    const next = this.inputs[Math.min(startIndex + chars.length, CREDENTIAL_LENGTH - 1)];
-    next?.focus();
-  }
 }

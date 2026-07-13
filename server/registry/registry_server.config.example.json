@@ -3,6 +3,7 @@
   "port": 8080,
   "databasePath": "./data/registry.db",
   "registryApiKeyInitialUses": 100,
+  "maxBodyBytes": 33554432,
   "placementPolicy": {
     "stripeTargetRelays": 3,
     "maxFileReplicaCount": 1,

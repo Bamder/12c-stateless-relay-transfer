@@ -58,7 +58,7 @@ class RelayServerConfig:
         max_body_bytes = _require_int(
             value.get("maxBodyBytes"),
             "maxBodyBytes",
-            default=16 * 1024 * 1024,
+            default=32 * 1024 * 1024,
         )
         max_blocks = _require_int(value.get("maxBlocks"), "maxBlocks", default=100_000)
         data_dir = Path(

@@ -1,5 +1,9 @@
 import type { RelayEndpoint } from '../types.js';
 import type { RelayRouter } from '../router/relay-router.js';
+import {
+  detectRelayHopProtocol,
+  type RelayHopProtocol,
+} from '../resilience/stripe-put-concurrency.js';
 
 export interface FetchUploadClientOptions {
   fetch?: typeof fetch;
@@ -28,6 +32,10 @@ export class FetchUploadClient {
     if (this.rejectNonOk && !response.ok) {
       throw new Error(`PUT ${endpoint.url} failed: HTTP ${response.status}`);
     }
+  }
+
+  async probeHopProtocol(sampleUrl: string): Promise<RelayHopProtocol> {
+    return detectRelayHopProtocol(sampleUrl, this.fetchFn);
   }
 
   async putViaRouter(

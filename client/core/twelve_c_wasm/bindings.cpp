@@ -4,8 +4,10 @@
 #include "twelve_c/constants.hpp"
 #include "twelve_c/crypto.hpp"
 #include "twelve_c/receiver.hpp"
+#include "twelve_c/receive_decrypt_session.hpp"
 #include "twelve_c/sender.hpp"
 #include "twelve_c/smb_parser.hpp"
+#include "twelve_c/upload_prepare_session.hpp"
 
 #include <openssl/crypto.h>
 #include <openssl/rand.h>
@@ -77,10 +79,28 @@ Bytes val_to_bytes(const val& js_array) {
 
 val bytes_to_val(const Bytes& data) {
     val js_array = val::global("Uint8Array").new_(data.size());
-    for (std::size_t index = 0; index < data.size(); ++index) {
-        js_array.set(static_cast<std::uint32_t>(index), data[index]);
+    if (!data.empty()) {
+        js_array.call<void>("set", typed_memory_view(data.size(), data.data()));
     }
     return js_array;
+}
+
+val wire_blocks_to_js(const std::vector<UploadWireBlock>& blocks) {
+    val entries = val::array();
+    for (const auto& block : blocks) {
+        val entry = val::object();
+        entry.set("token", block.token);
+        entry.set("data", bytes_to_val(block.data));
+        entries.call<void>("push", entry);
+    }
+    return entries;
+}
+
+val wire_block_to_js(const UploadWireBlock& block) {
+    val entry = val::object();
+    entry.set("token", block.token);
+    entry.set("data", bytes_to_val(block.data));
+    return entry;
 }
 
 val upload_map_to_js(const UploadMap& uploads) {
@@ -106,17 +126,37 @@ UploadMap js_to_upload_map(const val& entries) {
     return uploads;
 }
 
+void verify_upload_map_smb(
+    const std::string& credential,
+    const UploadMap& uploads) {
+    const CredentialParts parts = split_credential(credential);
+    const std::string token0_key = derive_upload_token(
+        parts.search_code,
+        kSaltFixSearch,
+        0);
+    const auto iterator = uploads.find(token0_key);
+    if (iterator == uploads.end()) {
+        throw std::runtime_error("internal verify: token0 missing from upload map");
+    }
+    parse_smb_encrypted(credential, iterator->second);
+}
+
 val prepare_upload_js(
     const val& file_plaintext,
     const std::string& credential,
-    const std::string& original_file_name) {
+    const std::string& original_file_name,
+    const std::uint16_t segment_code,
+    const std::size_t max_wire_block_bytes) {
     ensure_crypto_ready();
     try {
-        return upload_map_to_js(
-            prepare_upload(
-                val_to_bytes(file_plaintext),
-                credential,
-                original_file_name));
+        const UploadMap uploads = prepare_upload(
+            val_to_bytes(file_plaintext),
+            credential,
+            original_file_name,
+            segment_code,
+            max_wire_block_bytes);
+        verify_upload_map_smb(credential, uploads);
+        return upload_map_to_js(uploads);
     } catch (const std::exception& ex) {
         throw_js_error(std::string(ex.what()));
     } catch (...) {
@@ -167,11 +207,195 @@ val parse_smb_encrypted_js(
         result.set("ciphertextLength", metadata.ciphertext_length);
         result.set("originalFileLength", metadata.original_file_length);
         result.set("originalFileName", metadata.original_file_name);
+        result.set("segmentCode", metadata.segment_code);
         return result;
     } catch (const std::exception& ex) {
         throw_js_error(std::string(ex.what()));
     } catch (...) {
         throw_js_error("parseSmbEncrypted failed");
+    }
+    return val::undefined();
+}
+
+class UploadPrepareSessionBindings {
+public:
+    UploadPrepareSessionBindings(
+        std::string credential,
+        std::string original_file_name,
+        const std::size_t file_plaintext_size,
+        const std::uint16_t segment_code,
+        const std::size_t max_wire_block_bytes)
+        : session_(
+              std::move(credential),
+              std::move(original_file_name),
+              file_plaintext_size,
+              segment_code,
+              max_wire_block_bytes) {}
+
+    void feed(const val& chunk) {
+        try {
+            session_.feed(val_to_bytes(chunk));
+        } catch (const std::exception& ex) {
+            throw_js_error(std::string(ex.what()));
+        } catch (...) {
+            throw_js_error("upload prepare feed failed");
+        }
+    }
+
+    val takeReadyBlocks() {
+        try {
+            return wire_blocks_to_js(session_.take_ready_blocks());
+        } catch (const std::exception& ex) {
+            throw_js_error(std::string(ex.what()));
+        } catch (...) {
+            throw_js_error("upload prepare takeReadyBlocks failed");
+        }
+        return val::array();
+    }
+
+    val finalize() {
+        try {
+            return wire_block_to_js(session_.finalize());
+        } catch (const std::exception& ex) {
+            throw_js_error(std::string(ex.what()));
+        } catch (...) {
+            throw_js_error("upload prepare finalize failed");
+        }
+        return val::undefined();
+    }
+
+private:
+    UploadPrepareSession session_;
+};
+
+UploadPrepareSessionBindings* create_upload_prepare_session(
+    std::string credential,
+    std::string original_file_name,
+    const std::size_t file_plaintext_size,
+    const std::uint16_t segment_code,
+    const std::size_t max_wire_block_bytes) {
+    ensure_crypto_ready();
+    try {
+        return new UploadPrepareSessionBindings(
+            std::move(credential),
+            std::move(original_file_name),
+            file_plaintext_size,
+            segment_code,
+            max_wire_block_bytes);
+    } catch (const std::exception& ex) {
+        throw_js_error(std::string(ex.what()));
+    } catch (...) {
+        throw_js_error("createUploadPrepareSession failed");
+    }
+    return nullptr;
+}
+
+class ReceiveDecryptSessionBindings {
+public:
+    ReceiveDecryptSessionBindings(
+        std::string credential,
+        const val& token0_wire)
+        : session_(std::move(credential), val_to_bytes(token0_wire)) {}
+
+    void addWireToken(const std::uint32_t token_index, const val& wire_data) {
+        try {
+            session_.add_wire_token(token_index, val_to_bytes(wire_data));
+        } catch (const std::exception& ex) {
+            throw_js_error(std::string(ex.what()));
+        } catch (...) {
+            throw_js_error("receive decrypt addWireToken failed");
+        }
+    }
+
+    val finalize() {
+        try {
+            return bytes_to_val(session_.finalize());
+        } catch (const std::exception& ex) {
+            throw_js_error(std::string(ex.what()));
+        } catch (...) {
+            throw_js_error("receive decrypt finalize failed");
+        }
+        return val::undefined();
+    }
+
+    void completeFinalize() {
+        try {
+            session_.complete_finalize();
+        } catch (const std::exception& ex) {
+            throw_js_error(std::string(ex.what()));
+        } catch (...) {
+            throw_js_error("receive decrypt completeFinalize failed");
+        }
+    }
+
+    std::size_t plaintextByteLength() const {
+        try {
+            return session_.plaintext_byte_length();
+        } catch (const std::exception& ex) {
+            throw_js_error(std::string(ex.what()));
+        } catch (...) {
+            throw_js_error("receive decrypt plaintextByteLength failed");
+        }
+        return 0;
+    }
+
+    std::size_t paddedPlaintextLength() const {
+        return session_.padded_plaintext_length();
+    }
+
+    std::size_t originalFileLength() const {
+        return session_.original_file_length();
+    }
+
+    val takePlaintextChunk(const std::size_t max_bytes) {
+        try {
+            return bytes_to_val(session_.take_plaintext_chunk(max_bytes));
+        } catch (const std::exception& ex) {
+            throw_js_error(std::string(ex.what()));
+        } catch (...) {
+            throw_js_error("receive decrypt takePlaintextChunk failed");
+        }
+        return val::undefined();
+    }
+
+private:
+    ReceiveDecryptSession session_;
+};
+
+ReceiveDecryptSessionBindings* create_receive_decrypt_session(
+    std::string credential,
+    const val& token0_wire) {
+    ensure_crypto_ready();
+    try {
+        return new ReceiveDecryptSessionBindings(
+            std::move(credential),
+            token0_wire);
+    } catch (const std::exception& ex) {
+        throw_js_error(std::string(ex.what()));
+    } catch (...) {
+        throw_js_error("createReceiveDecryptSession failed");
+    }
+    return nullptr;
+}
+
+val crypto_roundtrip_wasm_js(
+    const val& file_plaintext,
+    const std::string& credential,
+    const std::uint16_t segment_code,
+    const std::size_t max_wire_block_bytes) {
+    ensure_crypto_ready();
+    try {
+        const UploadMap uploads = prepare_upload(
+            val_to_bytes(file_plaintext),
+            credential,
+            "roundtrip.bin",
+            segment_code,
+            max_wire_block_bytes);
+        return bytes_to_val(receive_from_upload_map(credential, uploads));
+    } catch (const std::exception& ex) {
+        throw_js_error(std::string(ex.what()));
+    } catch (...) {
+        throw_js_error("cryptoRoundtripWasm failed");
     }
     return val::undefined();
 }
@@ -183,4 +407,27 @@ EMSCRIPTEN_BINDINGS(twelve_c_wasm) {
     function("receiveFromUploadMap", &receive_from_upload_map_js);
     function("deriveUploadToken", &derive_upload_token_js);
     function("parseSmbEncrypted", &parse_smb_encrypted_js);
+    function("cryptoRoundtripWasm", &crypto_roundtrip_wasm_js);
+    function(
+        "createUploadPrepareSession",
+        &create_upload_prepare_session,
+        allow_raw_pointers());
+    function(
+        "createReceiveDecryptSession",
+        &create_receive_decrypt_session,
+        allow_raw_pointers());
+
+    class_<UploadPrepareSessionBindings>("UploadPrepareSession")
+        .function("feed", &UploadPrepareSessionBindings::feed)
+        .function("takeReadyBlocks", &UploadPrepareSessionBindings::takeReadyBlocks)
+        .function("finalize", &UploadPrepareSessionBindings::finalize);
+
+    class_<ReceiveDecryptSessionBindings>("ReceiveDecryptSession")
+        .function("addWireToken", &ReceiveDecryptSessionBindings::addWireToken)
+        .function("finalize", &ReceiveDecryptSessionBindings::finalize)
+        .function("completeFinalize", &ReceiveDecryptSessionBindings::completeFinalize)
+        .function("plaintextByteLength", &ReceiveDecryptSessionBindings::plaintextByteLength)
+        .function("paddedPlaintextLength", &ReceiveDecryptSessionBindings::paddedPlaintextLength)
+        .function("originalFileLength", &ReceiveDecryptSessionBindings::originalFileLength)
+        .function("takePlaintextChunk", &ReceiveDecryptSessionBindings::takePlaintextChunk);
 }

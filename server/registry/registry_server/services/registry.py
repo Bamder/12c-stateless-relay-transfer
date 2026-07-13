@@ -52,6 +52,7 @@ def normalize_hash(block_hash: str) -> str:
 class ResolveRouteResult:
     token: str
     targets: tuple[RelayTarget, ...]
+    resolve_status: str = "ready"
 
 
 @dataclass(frozen=True)
@@ -131,12 +132,31 @@ class RegistryService:
         self,
         tokens: list[str],
     ) -> list[ResolveRouteResult]:
+        statuses = {
+            token: await self._repository.classify_token_resolve_status(token)
+            for token in tokens
+        }
         await self._repository.purge_expired_tokens()
         results: list[ResolveRouteResult] = []
 
         for token in tokens:
             resolved = await self._repository.get_resolve_targets(token)
-            results.append(await self._resolve_download(token, resolved))
+            if resolved is None:
+                results.append(
+                    ResolveRouteResult(
+                        token=token,
+                        targets=(),
+                        resolve_status=statuses[token],
+                    ),
+                )
+                continue
+            results.append(
+                ResolveRouteResult(
+                    token=token,
+                    targets=resolved.targets,
+                    resolve_status="ready",
+                ),
+            )
 
         await self._repository.record_token_resolution_event(
             token_count=len(tokens),
@@ -150,10 +170,11 @@ class RegistryService:
         resolved: TokenReserveResult | None,
     ) -> ResolveRouteResult:
         if resolved is None:
-            return ResolveRouteResult(token=token, targets=())
+            return ResolveRouteResult(token=token, targets=(), resolve_status="unavailable")
         return ResolveRouteResult(
             token=token,
             targets=resolved.targets,
+            resolve_status="ready",
         )
 
     async def reserve_upload_blocks(
@@ -184,6 +205,7 @@ class RegistryService:
             ResolveRouteResult(
                 token=route.token,
                 targets=route.targets,
+                resolve_status="ready",
             )
             for route in outcome.routes
         ]
