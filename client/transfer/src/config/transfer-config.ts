@@ -1,4 +1,3 @@
-/** 注册服务器连接配置（来自 relay.config.json） */
 export interface RegistryConfig {
   /**
    * 注册服务器根 URL，例如 `http://203.0.113.10:8080`。
@@ -13,8 +12,15 @@ export interface RegistryConfig {
   coalesce?: boolean;
 }
 
+/** Relay 集群能力（由 Registry 动态下发的 relay.config.json）。 */
+export interface RelayFleetConfig {
+  /** 单块 PUT body 上限（字节）；默认 32 MiB。 */
+  maxBodyBytes?: number;
+}
+
 export interface TransferConfig {
   registry: RegistryConfig;
+  relay?: RelayFleetConfig;
 }
 
 export const DEFAULT_CONFIG_FILENAME = 'relay.config.json';
@@ -109,7 +115,33 @@ export function parseTransferConfig(value: unknown): TransferConfig {
   }
 
   resolveRegistryBaseUrl(config);
-  return { registry: config };
+  const relay = parseRelayFleetConfig(root.relay);
+  return relay === undefined ? { registry: config } : { registry: config, relay };
+}
+
+function parseRelayFleetConfig(value: unknown): RelayFleetConfig | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new Error('transfer config "relay" must be an object');
+  }
+
+  const relay = value as Record<string, unknown>;
+  const fleet: RelayFleetConfig = {};
+
+  if (relay.maxBodyBytes !== undefined) {
+    if (
+      typeof relay.maxBodyBytes !== 'number' ||
+      !Number.isFinite(relay.maxBodyBytes) ||
+      relay.maxBodyBytes <= 0
+    ) {
+      throw new Error('relay.maxBodyBytes must be a positive finite number');
+    }
+    fleet.maxBodyBytes = Math.trunc(relay.maxBodyBytes);
+  }
+
+  return Object.keys(fleet).length > 0 ? fleet : {};
 }
 
 function parseHeaders(value: unknown): Record<string, string> {

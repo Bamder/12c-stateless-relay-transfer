@@ -1131,6 +1131,14 @@ class RegistryRepository:
     def is_placement_live(self, placement: TokenPlacement) -> bool:
         return not self._is_expired(placement.expiry_at)
 
+    async def classify_token_resolve_status(self, token: str) -> str:
+        placements = await self.get_token_placements(token)
+        if not placements:
+            return "unavailable"
+        if not any(self.is_placement_live(item) for item in placements):
+            return "expired"
+        return "ready"
+
     async def update_token_block_hash(self, token: str, block_hash: str) -> None:
         now = utc_now_iso()
         async with aiosqlite.connect(self._database_path) as db:

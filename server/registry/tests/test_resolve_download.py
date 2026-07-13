@@ -69,6 +69,29 @@ def test_resolve_returns_empty_targets_for_missing_tokens(client: TestClient) ->
 
     missing = routes[TOKEN_MISSING]
     assert missing["targets"] == []
+    assert missing.get("resolveStatus") == "unavailable"
+
+
+def test_resolve_marks_expired_tokens(client: TestClient, tmp_path: Path) -> None:
+    import sqlite3
+
+    _reserve_token(client, TOKEN_PRESENT)
+    db_path = tmp_path / "registry.db"
+    with sqlite3.connect(db_path) as db:
+        db.execute(
+            "UPDATE token_relay_placements SET expiry_at = '2000-01-01T00:00:00+00:00'",
+        )
+        db.commit()
+
+    response = client.post(
+        "/api/relay/resolve",
+        json={"tokens": [TOKEN_PRESENT]},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["routes"] == [
+        {"token": TOKEN_PRESENT, "targets": [], "resolveStatus": "expired"},
+    ]
 
 
 def test_resolve_all_missing_returns_empty_targets_without_error(
@@ -80,4 +103,6 @@ def test_resolve_all_missing_returns_empty_targets_without_error(
     )
     assert response.status_code == 200
     payload = response.json()
-    assert payload["routes"] == [{"token": TOKEN_MISSING, "targets": []}]
+    assert payload["routes"] == [
+        {"token": TOKEN_MISSING, "targets": [], "resolveStatus": "unavailable"},
+    ]

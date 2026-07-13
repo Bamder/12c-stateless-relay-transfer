@@ -1,6 +1,9 @@
 import type { UploadMap } from '../types.js';
 import type { BlockHashEntry } from '../protocol/block-hash.js';
-import { computeBlockHashSha256 } from '../protocol/block-hash.js';
+import {
+  computeUploadBlockHashesParallel,
+  DEFAULT_BLOCK_HASH_CONCURRENCY,
+} from '../protocol/block-hash-pool.js';
 import type { RegistryClient, UploadReservationMeta } from '../router/registry-client.js';
 import {
   endpointsFromRegistryMap,
@@ -21,6 +24,10 @@ export interface ResolveUploadEndpointsOptions {
   registry?: RegistryClient;
   ttlSeconds?: number;
   onStatus?: (status: UploadStatusUpdate) => void;
+  /** 流水线阶段已算好的块哈希；提供时跳过哈希 */
+  precomputedBlockHashes?: BlockHashEntry[];
+  /** 并行哈希并发上限，默认 12 */
+  hashConcurrency?: number;
 }
 
 export async function resolveUploadEndpoints(
@@ -32,6 +39,8 @@ export async function resolveUploadEndpoints(
     return reserveAndRegisterUploadBlocks(uploads, options.registry, {
       ttlSeconds: options.ttlSeconds,
       onStatus: options.onStatus,
+      precomputedBlockHashes: options.precomputedBlockHashes,
+      hashConcurrency: options.hashConcurrency,
     });
   }
 
@@ -50,18 +59,33 @@ export async function resolveUploadEndpoints(
 export async function reserveAndRegisterUploadBlocks(
   uploads: UploadMap,
   registry: RegistryClient,
-  options: { ttlSeconds?: number; onStatus?: (status: UploadStatusUpdate) => void } = {},
+  options: {
+    ttlSeconds?: number;
+    onStatus?: (status: UploadStatusUpdate) => void;
+    precomputedBlockHashes?: BlockHashEntry[];
+    hashConcurrency?: number;
+  } = {},
 ): Promise<UploadRoutePlan> {
-  const entries: BlockHashEntry[] = [];
-  const total = uploads.size;
-  let index = 0;
-  for (const [token, blob] of uploads) {
-    index++;
-    options.onStatus?.({ phase: 'hashing', index, total });
-    entries.push({
-      token,
-      blockHash: await computeBlockHashSha256(blob),
-    });
+  const entries =
+    options.precomputedBlockHashes ??
+    (await computeUploadBlockHashesParallel(uploads, {
+      concurrency: options.hashConcurrency ?? DEFAULT_BLOCK_HASH_CONCURRENCY,
+      onProgress: (completed, total) => {
+        options.onStatus?.({ phase: 'hashing', index: completed, total });
+      },
+    }));
+
+  if (entries.length !== uploads.size) {
+    throw new Error(
+      `block hash count mismatch: expected ${uploads.size}, got ${entries.length}`,
+    );
+  }
+
+  const hashByToken = new Map(entries.map((entry) => [entry.token, entry.blockHash]));
+  for (const token of uploads.keys()) {
+    if (!hashByToken.has(token)) {
+      throw new Error(`missing block hash for token: ${token}`);
+    }
   }
 
   options.onStatus?.({ phase: 'reserving' });

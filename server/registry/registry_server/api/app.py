@@ -52,7 +52,7 @@ def create_app(config: RegistryServerConfig | None = None) -> FastAPI:
 
     app.include_router(create_relay_router(service))
     app.include_router(create_admin_router(service))
-    mount_client_static(app, settings.client_static_dir)
+    mount_client_static(app, settings.client_static_dir, settings.max_body_bytes)
 
     app.state.config = settings
     app.state.repository = repository

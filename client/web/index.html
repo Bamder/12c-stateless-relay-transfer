@@ -254,41 +254,99 @@
           <div id="receive-error" class="banner error hidden"></div>
           <div class="card receive-card">
             <div class="receive-credential-section">
-              <span class="field-label receive-credential-title">12C 文件提取凭证</span>
+              <div class="receive-credential-header">
+                <span class="field-label receive-credential-title">12C 文件提取凭证</span>
+                <button id="paste-receive-credential-btn" type="button" class="ghost-btn">
+                  粘贴凭证
+                </button>
+              </div>
               <div id="receive-credential-slots"></div>
             </div>
 
             <div class="receive-flow">
-              <button
-                id="receive-download-btn"
-                type="button"
-                class="receive-download-trigger"
-                disabled
-                aria-label="点击下载"
-              >
-                <span class="receive-download-arrow" aria-hidden="true">
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    viewBox="0 0 48 48"
-                    width="48"
-                    height="48"
-                    aria-hidden="true"
-                    focusable="false"
-                  >
-                    <path
-                      d="M24 44 4 18h12V4h16v14h12L24 44z"
-                      fill="currentColor"
-                    />
-                  </svg>
-                </span>
-                <span id="receive-download-hint" class="receive-download-hint">点击下载</span>
-              </button>
+              <div class="receive-download-row">
+                <div
+                  id="receive-download-progress-header"
+                  class="receive-download-status-slot hidden"
+                  aria-live="polite"
+                >
+                  <span id="receive-download-status" class="receive-download-status">
+                    <span
+                      id="receive-download-spinner"
+                      class="receive-download-spinner hidden"
+                      aria-hidden="true"
+                    ></span>
+                    <span
+                      id="receive-download-status-text"
+                      class="receive-download-status-text"
+                    ></span>
+                  </span>
+                </div>
+                <button
+                  id="receive-download-btn"
+                  type="button"
+                  class="receive-download-trigger receive-download-trigger--idle"
+                  disabled
+                  aria-label="点击下载"
+                >
+                  <div class="receive-download-visual">
+                    <div class="receive-download-ring-host">
+                      <svg
+                        class="receive-download-ring"
+                        viewBox="0 0 100 100"
+                        aria-hidden="true"
+                        focusable="false"
+                      >
+                        <circle
+                          class="receive-download-ring-track"
+                          cx="50"
+                          cy="50"
+                          r="46"
+                          pathLength="100"
+                        />
+                        <circle
+                          id="receive-download-ring-fill"
+                          class="receive-download-ring-fill"
+                          cx="50"
+                          cy="50"
+                          r="46"
+                          pathLength="100"
+                        />
+                      </svg>
+                      <div class="receive-download-ring-inner">
+                        <span class="receive-download-arrow" aria-hidden="true">
+                          <svg
+                            xmlns="http://www.w3.org/2000/svg"
+                            viewBox="0 0 48 48"
+                            width="48"
+                            height="48"
+                            aria-hidden="true"
+                            focusable="false"
+                          >
+                            <path
+                              d="M24 44 4 18h12V4h16v14h12L24 44z"
+                              fill="currentColor"
+                            />
+                          </svg>
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                  <span id="receive-download-hint" class="receive-download-hint">点击下载</span>
+                </button>
+                <span
+                  id="receive-download-progress-text"
+                  class="receive-download-progress-text hidden"
+                  aria-live="polite"
+                ></span>
+              </div>
 
-              <div
-                id="receive-file-bar"
-                class="receive-file-bar receive-file-bar--pending"
-                role="presentation"
-              >
+              <div class="receive-file-area">
+                <div
+                  id="receive-file-bar"
+                  class="receive-file-bar receive-file-bar--pending"
+                  role="presentation"
+                >
                 <span id="receive-file-pending" class="receive-file-pending">等待下载</span>
                 <span id="receive-file-ready" class="receive-file-ready hidden">
                   <span id="receive-file-icon" class="file-icon" aria-hidden="true"></span>
@@ -298,6 +356,7 @@
                 <span id="receive-file-save-hint" class="receive-file-save-hint hidden"
                   >点击保存到本地</span
                 >
+              </div>
               </div>
             </div>
           </div>

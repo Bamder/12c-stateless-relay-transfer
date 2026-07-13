@@ -24,6 +24,39 @@ export interface SmbMetadata {
   ciphertextLength: number;
   originalFileLength: number;
   originalFileName: string;
+  /** 0 = V2 whole-file; 1..5 = V2.1 segment code */
+  segmentCode: number;
+}
+
+/** WASM uint64 等可能以 bigint 进入 JS；统一为 safe integer 再比较。 */
+export function toSafeByteLength(value: unknown, label = 'byteLength'): number {
+  if (typeof value === 'bigint') {
+    if (value < 0n) {
+      throw new Error(`${label} must be non-negative`);
+    }
+    const asNumber = Number(value);
+    if (!Number.isSafeInteger(asNumber) || BigInt(asNumber) !== value) {
+      throw new Error(`${label} exceeds JS safe integer range: ${value}`);
+    }
+    return asNumber;
+  }
+
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value) || value < 0 || !Number.isSafeInteger(value)) {
+      throw new Error(`${label} must be a non-negative safe integer: ${value}`);
+    }
+    return value;
+  }
+
+  if (typeof value === 'string' && value.trim() !== '') {
+    return toSafeByteLength(Number(value), label);
+  }
+
+  throw new Error(`${label} must be a byte length: ${String(value)}`);
+}
+
+export function byteLengthsEqual(left: unknown, right: unknown): boolean {
+  return toSafeByteLength(left) === toSafeByteLength(right);
 }
 
 /** relay 上单个 token 的访问端点（由 RegistryClient / RelayRouter 决定） */

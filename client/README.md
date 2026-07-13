@@ -2,6 +2,8 @@
 
 浏览器端与 TypeScript 传输层（npm workspaces：`transfer` / `app` / `web`），加密核心来自 `core/twelve_c_wasm`（Emscripten）或 `core/12c_file_transfer_scheme`（原生 C++）。
 
+实现结构、V2/V2.1 状态、WASM API 与部署约束见 **[core/README.md](core/README.md)**；协议规范见 [docs/12C-Transfer-Protocol.zh.md](../docs/12C-Transfer-Protocol.zh.md)。
+
 ## 构建脚本一览
 
 同步仓库后，**以下脚本应存在于 `client/` 树中**。若缺失，从版本库恢复或对照本表检查路径。
@@ -49,10 +51,59 @@ npm run build:native   # → core/build-native.ps1
 
 ### 原生 C++ 验证（`client/core/`）
 
+桌面 toolchain 下的**可选**编译检查，**不能替代** WASM 构建，也不参与 `:8080` / `:5173` 部署流水线。
+
 | 脚本 | 作用 |
 |------|------|
 | [`build-native.ps1`](core/build-native.ps1) / [`.sh`](core/build-native.sh) | CMake 编译 → 仓库根 `build-test/native/` |
+| `npm run build:native` / `build:native:sh` | 同上（在 `client/` 目录） |
 
+```powershell
+cd client\core
+.\build-native.ps1
+```
+
+需要本机 **CMake ≥ 3.20** 与 **OpenSSL 开发包**（系统 x86/amd64 版，非 Emscripten 交叉编译版）。
+
+#### 与 WASM 构建的异同
+
+| | **原生 C++**（`build-native`） | **WASM**（`build-wasm`） |
+|---|--------------------------------|--------------------------|
+| **目的** | 快速验证 C++ 能否在桌面环境编过 | 浏览器实际上线路径 |
+| **工具链** | 系统 CMake + 编译器 | emsdk + `emcmake` / `em++` |
+| **OpenSSL** | 系统安装的 `OpenSSL::Crypto` | `third_party/openssl-emscripten/libcrypto.a` |
+| **编译的源码** | 见下表「重叠 / 独有」 | 见下表「重叠 / 独有」 |
+| **产物** | 静态库（`build-test/native/`） | `twelve_c_cryptography.{js,wasm}` → `transfer/src/wasm/pkg/` |
+| **JS/浏览器绑定** | 无 | `bindings.cpp`（embind） |
+| **部署是否必需** | 否 | 是（改 `12c_cryptography` 后必须重编） |
+
+**源码重叠（同一套 `.cpp`，改一处两边都应能编过）：**
+
+| 模块 | 路径 |
+|------|------|
+| 密码学核心 | `core/12c_file_transfer_scheme/12c_cryptography/src/*.cpp` |
+
+**仅原生包含：**
+
+| 模块 | 路径 | 说明 |
+|------|------|------|
+| 接收协议调度 | `core/12c_file_transfer_scheme/12c_receive_protocol/` | 下载计划等；浏览器侧由 TypeScript 会话层实现，**不进 WASM** |
+
+**仅 WASM 包含：**
+
+| 模块 | 路径 | 说明 |
+|------|------|------|
+| Emscripten 绑定 | `core/twelve_c_wasm/bindings.cpp` | 导出 `prepareUpload`、`receiveFromUploadMap` 等给 TS |
+
+**何时用哪个：**
+
+| 场景 | 用 |
+|------|-----|
+| 改 `12c_cryptography`，想快查语法/链接、本机有 OpenSSL | `build-native.ps1`（可选） |
+| 改 `12c_cryptography` 或 `bindings.cpp`，要在浏览器里跑通 | `build-wasm.ps1` 或 `build.ps1 -ForceWasm`（**必须**） |
+| 功能 roundtrip 验证 | 浏览器 `?selftest=roundtrip` 或实际上传/下载（走 WASM，不走 native） |
+
+详见 [core/README.md](core/README.md) 与 [core/twelve_c_wasm/README.md](core/twelve_c_wasm/README.md)。
 ### Transfer npm 快捷方式（`client/transfer/`）
 
 与 `twelve_c_wasm` 脚本等价，可在 `client/transfer` 目录执行：
@@ -61,12 +112,84 @@ npm run build:native   # → core/build-native.ps1
 - `npm run setup:emsdk` / `setup:emsdk:sh`
 - `npm run build:openssl:wasm` / `build:openssl:wasm:sh`
 
+## 部署与脚本执行顺序
+
+Client 有两种入口：**Registry 托管生产包**（`:8080`，推荐联调/穿透）与 **Vite 开发服务器**（`:5173`，改前端时用）。  
+全栈（Registry → Relay → Console → 审批入池）见仓库根目录 [`HOW_TO_SETUP.md`](../HOW_TO_SETUP.md)；下文只说明 **Client 侧** 在各类场景下应跑哪些脚本、顺序如何。
+
+### 生产部署（Registry `:8080`）
+
+Registry 静态托管 `client/web/dist/`。典型顺序：
+
+| 步骤 | 命令 | 说明 |
+|------|------|------|
+| **0**（首次） | `core/twelve_c_wasm/setup-emsdk.ps1 -EmsdkRoot C:\path\to\emsdk -SetEnv` | 安装 emsdk 并写入用户 `EMSDK`；详见 [core/twelve_c_wasm/README.md](core/twelve_c_wasm/README.md) |
+| **1**（首次或改 C++/WASM） | `.\build.ps1 -Production` | `npm install` → `build-ts` → WASM（若缺）→ `copy:wasm` → `vite build` → 输出 `web/dist/` |
+| **1'**（仅改 TS/UI） | `.\build.ps1 -Production -SkipWasm` | 跳过 WASM，加快前端迭代 |
+| **1''**（仅改 C++） | `.\build.ps1 -Production -SkipTs -ForceWasm` | 只重编 WASM 并打生产包 |
+| **2** | 重启 Registry | `cd server\registry` → `.\start.ps1`（或 Console 侧边栏重启） |
+| **3** | 浏览器 | 打开 `http://127.0.0.1:8080`，必要时 **Ctrl+F5** 硬刷新 |
+
+`build.ps1 -Production` 内部顺序固定为：
+
+```text
+npm install（若缺 node_modules）
+  → build-ts.ps1          # transfer + app → dist/
+  → build-wasm.ps1        # 若 pkg 无 .wasm 或 -ForceWasm
+  → web: copy:wasm        # pkg → web/public/wasm/
+  → web: vite build       # → web/dist/
+```
+
+服务端需已启动且 Relay 已入池；否则上传会失败（与 Client 构建无关）。
+
+### 开发调试（Vite `:5173`）
+
+| 步骤 | 命令 | 说明 |
+|------|------|------|
+| **1**（首次） | `.\build.ps1 -SetupEmsdk -EmsdkRoot C:\path\to\emsdk` | 等同安装 emsdk + 完整 Client 构建（不含 `dist/`） |
+| **1**（日常） | `.\build.ps1` | TS + WASM（若缺）+ `copy:wasm`；**不**生成 `web/dist/` |
+| **2** | `.\start.ps1` | 启动 Vite → `http://127.0.0.1:5173` |
+| **3** | 确保 Registry `:8080` 在线 | `relay.config.json` 仍指向 Registry API |
+
+改代码后的最小重编：
+
+| 改动范围 | 命令 |
+|----------|------|
+| 仅 TypeScript / Vue | `.\build-ts.ps1`，然后刷新 Vite（或重启 `start.ps1`） |
+| 仅 C++ / `bindings.cpp` | `.\build.ps1 -SkipTs -ForceWasm` |
+| TS + WASM 都改 | `.\build.ps1 -ForceWasm` |
+
+### 按场景速查
+
+```text
+首次本机（生产入口）
+  setup-emsdk -SetEnv  →  server/start-all  →  Console 审批 Relay
+  →  client/build.ps1 -Production  →  重启 Registry  →  :8080
+
+日常改前端（开发入口）
+  client/build.ps1  →  client/start.ps1  →  :5173
+
+更新已部署的 Client（:8080）
+  client/build.ps1 -Production  →  重启 Registry  →  浏览器硬刷新
+
+仅重编 WASM
+  client/core/twelve_c_wasm/build-wasm.ps1
+  或 client/build.ps1 -SkipTs -ForceWasm
+```
+
+已设置用户级 `EMSDK` 后，上述 `build.ps1` / `build-wasm.ps1` 可省略 `-EmsdkRoot`。
+
 ## 快速开始
 
 ```powershell
 cd client
-.\build.ps1 -SetupEmsdk -EmsdkRoot P:\_Tools\emsdk   # 首次
-.\start.ps1                                           # 日常
+
+# 首次：emsdk + 开发构建
+.\build.ps1 -SetupEmsdk -EmsdkRoot C:\path\to\emsdk
+.\start.ps1                    # 开发 → http://127.0.0.1:5173
+
+# 生产包（Registry :8080）
+.\build.ps1 -Production        # 然后重启 Registry
 ```
 
 完整联调说明见仓库根目录 [`HOW_TO_SETUP.md`](../HOW_TO_SETUP.md)。

@@ -39,6 +39,7 @@ export function endpointFromRegistryRecord(
 
   return {
     ...endpointFromBase(primary.relayBaseUrl, token, mergedHeaders),
+    // 下载 failover 用；上传走 routePlan.replicas，条带 primary 仅 PUT 主目标。
     fallbacks: replicas.map((target) =>
       endpointFromBase(target.relayBaseUrl, token, mergedHeaders),
     ),
