@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from urllib.parse import unquote
 
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -36,14 +37,40 @@ def client_dist_ready(static_dir: Path | None) -> bool:
 
 
 def request_public_origin(request: Request) -> str:
+    forwarded_prefix = request.headers.get("x-forwarded-prefix")
+    raw_prefix = (
+        forwarded_prefix.split(",", maxsplit=1)[0].strip()
+        if forwarded_prefix
+        else str(request.scope.get("root_path") or "").strip()
+    )
+    prefix = _safe_public_prefix(raw_prefix)
+
     forwarded_proto = request.headers.get("x-forwarded-proto")
     forwarded_host = request.headers.get("x-forwarded-host")
     if forwarded_proto and forwarded_host:
         scheme = forwarded_proto.split(",", maxsplit=1)[0].strip()
         host = forwarded_host.split(",", maxsplit=1)[0].strip()
         if scheme and host:
-            return f"{scheme}://{host}".rstrip("/")
-    return str(request.base_url).rstrip("/")
+            return f"{scheme}://{host}{prefix}".rstrip("/")
+
+    base_url = str(request.base_url).rstrip("/")
+    if forwarded_prefix and prefix and not base_url.endswith(prefix):
+        return f"{base_url}{prefix}"
+    return base_url
+
+
+def _safe_public_prefix(value: str) -> str:
+    if not value or value == "/":
+        return ""
+    decoded = unquote(value)
+    if (
+        not decoded.startswith("/")
+        or decoded.startswith("//")
+        or any(character in decoded for character in "?#\r\n")
+        or any(segment in {".", ".."} for segment in decoded.split("/"))
+    ):
+        return ""
+    return f"/{value.strip('/')}"
 
 
 def mount_client_static(
