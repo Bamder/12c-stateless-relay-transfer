@@ -282,6 +282,27 @@ function formatTransferBytesProgress(
   return `（${formatBytes(Math.max(0, transferred))} / ${formatBytes(total)}）`;
 }
 
+/** Prefetch window before SMB: (? / ceiling) until bytes start flowing. */
+function formatPrefetchBytesProgress(
+  received: number | undefined,
+  ceiling: number | undefined,
+): string {
+  if (
+    ceiling === undefined ||
+    !Number.isFinite(ceiling) ||
+    ceiling <= 0
+  ) {
+    return '';
+  }
+  const left =
+    received !== undefined &&
+    Number.isFinite(received) &&
+    received > 0
+      ? formatBytes(received)
+      : '- MB';
+  return `（${left} / 最高 ${formatBytes(ceiling)}）`;
+}
+
 function setBootProgress(ratio: number, message: string): void {
   el.bootStatus.textContent = message;
   el.bootProgressBar.style.width = `${Math.max(0, Math.min(100, ratio * 100))}%`;
@@ -713,13 +734,17 @@ function formatDownloadStatusMessage(status: DownloadStatusUpdate): string {
     }
     case 'awaiting_metadata_block': {
       const n = status.prefetchCount ?? 0;
+      const bytesHint = formatPrefetchBytesProgress(
+        status.prefetchBytesReceived,
+        status.prefetchBytesCeiling,
+      );
       if (n > 1) {
-        return `正在预获取 ${n} 块数据`;
+        return `正在预获取 ${n} 块数据${bytesHint}`;
       }
       if (n === 1) {
-        return '正在预获取 1 块数据';
+        return `正在预获取 1 块数据${bytesHint}`;
       }
-      return '正在预获取数据';
+      return `正在预获取数据${bytesHint}`;
     }
     case 'waiting_metadata_block':
       if (status.reason === 'registry') {
@@ -784,6 +809,10 @@ let receiveDownloadBlockProgress: {
   transferBytesTotal?: number;
 } | null = null;
 let receiveDownloadBlockProgressLocked = false;
+let receivePrefetchByteProgress: {
+  received: number;
+  ceiling: number;
+} | null = null;
 
 function paintReceiveDownloadBlockProgress(): void {
   if (receiveDownloadBlockProgress === null) {
@@ -838,11 +867,27 @@ const RECEIVE_DOWNLOAD_PHASE_RANK: Record<DownloadStatusUpdate['phase'], number>
     decrypting: 50,
   };
 
+function paintReceivePrefetchByteProgress(): void {
+  if (receivePrefetchByteProgress === null) {
+    return;
+  }
+  const hint = formatPrefetchBytesProgress(
+    receivePrefetchByteProgress.received,
+    receivePrefetchByteProgress.ceiling,
+  );
+  if (!hint) {
+    return;
+  }
+  el.receiveDownloadProgressText.classList.remove('hidden');
+  el.receiveDownloadProgressText.textContent = hint.replace(/^（|）$/g, '');
+}
+
 function setReceiveDownloadProgress(status: DownloadStatusUpdate | null): void {
   if (status === null) {
     receiveDownloadStatusRank = 0;
     receiveDownloadBlockProgress = null;
     receiveDownloadBlockProgressLocked = false;
+    receivePrefetchByteProgress = null;
     el.receiveDownloadProgressHeader.classList.add('hidden');
     el.receiveDownloadSpinner.classList.add('hidden');
     el.receiveDownloadStatusText.textContent = '';
@@ -870,16 +915,35 @@ function setReceiveDownloadProgress(status: DownloadStatusUpdate | null): void {
     return;
   }
 
+  if (status.phase === 'awaiting_metadata_block') {
+    if (
+      status.prefetchBytesCeiling !== undefined &&
+      status.prefetchBytesCeiling > 0
+    ) {
+      receivePrefetchByteProgress = {
+        received: Math.max(
+          receivePrefetchByteProgress?.received ?? 0,
+          status.prefetchBytesReceived ?? 0,
+        ),
+        ceiling: status.prefetchBytesCeiling,
+      };
+    }
+  }
+
   const rank = RECEIVE_DOWNLOAD_PHASE_RANK[status.phase];
   if (rank < receiveDownloadStatusRank) {
     if (receiveDownloadBlockProgressLocked) {
       paintReceiveDownloadBlockProgress();
+    } else if (receivePrefetchByteProgress !== null) {
+      // e.g. waiting_metadata_block text is newer; keep refreshing byte totals.
+      paintReceivePrefetchByteProgress();
     }
     return;
   }
   receiveDownloadStatusRank = rank;
 
   if (status.phase === 'downloading') {
+    receivePrefetchByteProgress = null;
     rememberReceiveDownloadBlockProgress(
       status.completed,
       status.total,
@@ -893,6 +957,29 @@ function setReceiveDownloadProgress(status: DownloadStatusUpdate | null): void {
 
   if (receiveDownloadBlockProgressLocked) {
     paintReceiveDownloadBlockProgress();
+    return;
+  }
+
+  if (status.phase === 'awaiting_metadata_block') {
+    el.receiveDownloadRingFill.style.strokeDasharray = '';
+    el.receiveDownloadRingFill.style.strokeDashoffset = '';
+    el.receiveDownloadBtn.classList.add(
+      'receive-download-trigger--ring-indeterminate',
+    );
+    paintReceivePrefetchByteProgress();
+    return;
+  }
+
+  if (
+    status.phase === 'waiting_metadata_block' &&
+    receivePrefetchByteProgress !== null
+  ) {
+    el.receiveDownloadRingFill.style.strokeDasharray = '';
+    el.receiveDownloadRingFill.style.strokeDashoffset = '';
+    el.receiveDownloadBtn.classList.add(
+      'receive-download-trigger--ring-indeterminate',
+    );
+    paintReceivePrefetchByteProgress();
     return;
   }
 

@@ -232,8 +232,17 @@ class RegistryService:
         if placement is None or not self._repository.is_placement_live(placement):
             raise HTTPException(status_code=404, detail="token not reserved or expired")
 
-        if placement.relay_base_url.rstrip("/") != relay_base_url.rstrip("/"):
-            raise HTTPException(status_code=403, detail="token bound to another relay")
+        # Bind by relay_id; Public URL may change after reserve. Reported URL must
+        # match the current canonical allowlist/state URL (caller usually pre-checks).
+        canonical = await self._repository.get_canonical_relay_base_url(relay_id)
+        if (
+            canonical is None
+            or canonical.rstrip("/") != relay_base_url.rstrip("/")
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail="token bound to another relay",
+            )
 
         if placement.block_hash != block_hash:
             raise HTTPException(

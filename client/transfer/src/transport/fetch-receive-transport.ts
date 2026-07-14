@@ -44,6 +44,11 @@ export type ReceiveTransportActivity =
       windowBytesTransferred: number;
       /** Concurrent in-flight GET window: expected sum of body sizes. */
       windowBytesTotal: number;
+      /**
+       * Wire bytes held locally but not yet taken by the session:
+       * in-flight streaming + fully buffered pending GETs.
+       */
+      receivedBytesNotConsumed: number;
     }
   | {
       kind: 'waiting';
@@ -83,6 +88,8 @@ export class FetchReceiveTransport implements ReceiveTransport {
   private readonly forceArrayBufferFallback: boolean;
   private expectedWireBlockBytes: number | undefined;
   private readonly downloadWindowMeter = new InFlightByteWindowMeter();
+  /** Fully downloaded bodies waiting for session `get()` (not yet consumed). */
+  private readonly bufferedReceivedBytes = new Map<string, number>();
   private activityListener: ((activity: ReceiveTransportActivity) => void) | null =
     null;
   private readonly lastWaitingActivity = new Map<
@@ -131,6 +138,17 @@ export class FetchReceiveTransport implements ReceiveTransport {
     return this.downloadWindowMeter.snapshot();
   }
 
+  /** In-flight transferred + buffered pending bodies not yet consumed by `get()`. */
+  getReceivedWireBytesNotConsumed(): number {
+    let buffered = 0;
+    for (const bytes of this.bufferedReceivedBytes.values()) {
+      buffered += bytes;
+    }
+    return (
+      buffered + this.downloadWindowMeter.snapshot().windowBytesTransferred
+    );
+  }
+
   startConcurrentGet(tokens: string[]): Promise<void> {
     return this.ensureTokensStarted(tokens);
   }
@@ -153,7 +171,10 @@ export class FetchReceiveTransport implements ReceiveTransport {
       }
       entry.abort.abort();
       this.pending.delete(token);
+      this.bufferedReceivedBytes.delete(token);
+      this.downloadWindowMeter.end(token);
     }
+    this.emitDownloadByteProgress();
   }
 
   async get(token: string): Promise<Uint8Array> {
@@ -183,11 +204,15 @@ export class FetchReceiveTransport implements ReceiveTransport {
         try {
           const data = await entry.promise;
           this.pending.delete(token);
+          this.bufferedReceivedBytes.delete(token);
           this.cancelledBeforeResolve.delete(token);
           this.lastWaitingActivity.delete(token);
+          this.emitDownloadByteProgress();
           return data;
         } catch (error) {
           this.pending.delete(token);
+          this.bufferedReceivedBytes.delete(token);
+          this.emitDownloadByteProgress();
           if (error instanceof TokenPlacementExpiredError) {
             throw error;
           }
@@ -293,6 +318,7 @@ export class FetchReceiveTransport implements ReceiveTransport {
     const abort = new AbortController();
     this.emitActivity({ kind: 'download_started', token });
 
+    this.bufferedReceivedBytes.delete(token);
     this.downloadWindowMeter.begin(token, this.expectedWireBlockBytes ?? 0);
     this.emitDownloadByteProgress();
 
@@ -309,10 +335,17 @@ export class FetchReceiveTransport implements ReceiveTransport {
         this.downloadWindowMeter.setTransferred(token, progress.bytesTransferred);
         this.emitDownloadByteProgress();
       },
-    }).finally(() => {
-      this.downloadWindowMeter.end(token);
-      this.emitDownloadByteProgress();
-    });
+    })
+      .then((data) => {
+        // Keep bytes visible after the lane leaves the in-flight meter, until
+        // the session consumes them via get().
+        this.bufferedReceivedBytes.set(token, data.byteLength);
+        return data;
+      })
+      .finally(() => {
+        this.downloadWindowMeter.end(token);
+        this.emitDownloadByteProgress();
+      });
 
     return { promise, abort };
   }
@@ -323,6 +356,7 @@ export class FetchReceiveTransport implements ReceiveTransport {
       kind: 'download_byte_progress',
       windowBytesTransferred: window.windowBytesTransferred,
       windowBytesTotal: window.windowBytesTotal,
+      receivedBytesNotConsumed: this.getReceivedWireBytesNotConsumed(),
     });
   }
 

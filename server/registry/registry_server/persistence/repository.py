@@ -66,7 +66,8 @@ class LockTokensOutcome:
 class TokenPlacement:
     token: str
     relay_id: str
-    relay_base_url: str
+    # Public URL recorded at reserve time (audit snapshot; not used for resolve).
+    registered_relay_base_url: str
     role: str
     block_hash: str
     expiry_at: str
@@ -212,7 +213,7 @@ class RegistryRepository:
                 CREATE TABLE IF NOT EXISTS token_relay_placements (
                     token TEXT NOT NULL,
                     relay_id TEXT NOT NULL,
-                    relay_base_url TEXT NOT NULL,
+                    registered_relay_base_url TEXT NOT NULL,
                     role TEXT NOT NULL,
                     block_hash TEXT NOT NULL,
                     expiry_at TEXT NOT NULL,
@@ -221,6 +222,7 @@ class RegistryRepository:
                 )
                 """,
             )
+            await self._migrate_token_placement_registered_url_column(db)
             await db.execute(
                 """
                 CREATE TABLE IF NOT EXISTS relay_states (
@@ -372,6 +374,28 @@ class RegistryRepository:
 
         await self._seed_allowlist()
         await self.purge_expired_tokens()
+
+    async def _migrate_token_placement_registered_url_column(
+        self,
+        db: aiosqlite.Connection,
+    ) -> None:
+        """Rename placement URL snapshot column to registered_relay_base_url."""
+        cursor = await db.execute("PRAGMA table_info(token_relay_placements)")
+        rows = await cursor.fetchall()
+        if not rows:
+            return
+        columns = {row[1] for row in rows}
+        if "registered_relay_base_url" in columns:
+            return
+        if "relay_base_url" not in columns:
+            return
+        await db.execute(
+            """
+            ALTER TABLE token_relay_placements
+            RENAME COLUMN relay_base_url TO registered_relay_base_url
+            """,
+        )
+        await db.commit()
 
     async def _migrate_registration_requests_schema(self, db: aiosqlite.Connection) -> None:
         cursor = await db.execute("PRAGMA table_info(relay_registration_requests)")
@@ -1030,15 +1054,45 @@ class RegistryRepository:
             await db.commit()
             return cursor.rowcount
 
+    async def get_canonical_relay_base_url(self, relay_id: str) -> str | None:
+        """Current public URL for a relay: allowlist first, then relay_states."""
+        record = await self.get_allowlist_record(relay_id)
+        if (
+            record is not None
+            and record.enabled
+            and record.relay_base_url is not None
+            and record.relay_base_url.strip()
+        ):
+            return record.relay_base_url.rstrip("/")
+
+        async with aiosqlite.connect(self._database_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                """
+                SELECT relay_base_url
+                FROM relay_states
+                WHERE relay_id = ?
+                """,
+                (relay_id,),
+            )
+            row = await cursor.fetchone()
+            if row is None:
+                return None
+            value = str(row["relay_base_url"]).strip().rstrip("/")
+            return value or None
+
     async def list_healthy_relays(self) -> list[HealthyRelay]:
         stale_before = (
             utc_now() - timedelta(seconds=self._config.relay_heartbeat_stale_seconds)
         ).isoformat()
         async with aiosqlite.connect(self._database_path) as db:
             db.row_factory = aiosqlite.Row
+            # Prefer allowlist URL (mutable Public URL) over heartbeat snapshot.
             cursor = await db.execute(
                 """
-                SELECT rs.relay_id, rs.relay_base_url, rs.storage_rate,
+                SELECT rs.relay_id,
+                       COALESCE(al.relay_base_url, rs.relay_base_url) AS relay_base_url,
+                       rs.storage_rate,
                        rs.block_max_age_seconds, rs.block_sweep_interval_seconds
                 FROM relay_states rs
                 INNER JOIN registry_allowlist al ON al.relay_id = rs.relay_id
@@ -1084,7 +1138,7 @@ class RegistryRepository:
         return TokenPlacement(
             token=str(row["token"]),
             relay_id=str(row["relay_id"]),
-            relay_base_url=str(row["relay_base_url"]).rstrip("/"),
+            registered_relay_base_url=str(row["registered_relay_base_url"]).rstrip("/"),
             role=str(row["role"]),
             block_hash=str(row["block_hash"]),
             expiry_at=str(row["expiry_at"]),
@@ -1095,7 +1149,8 @@ class RegistryRepository:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute(
                 """
-                SELECT token, relay_id, relay_base_url, role, block_hash, expiry_at
+                SELECT token, relay_id, registered_relay_base_url,
+                       role, block_hash, expiry_at
                 FROM token_relay_placements
                 WHERE token = ?
                 ORDER BY CASE role WHEN 'primary' THEN 0 ELSE 1 END, relay_id ASC
@@ -1114,7 +1169,8 @@ class RegistryRepository:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute(
                 """
-                SELECT token, relay_id, relay_base_url, role, block_hash, expiry_at
+                SELECT token, relay_id, registered_relay_base_url,
+                       role, block_hash, expiry_at
                 FROM token_relay_placements
                 WHERE token = ? AND relay_id = ?
                 """,
@@ -1156,22 +1212,31 @@ class RegistryRepository:
             )
             await db.commit()
 
-    def _placements_to_reserve_result(
+    async def _placements_to_reserve_result(
         self,
         token: str,
         placements: list[TokenPlacement],
+        *,
+        live_urls: dict[str, str] | None = None,
     ) -> TokenReserveResult:
-        return TokenReserveResult(
-            token=token,
-            targets=tuple(
+        """Build reserve/resolve targets; prefer live URLs keyed by relay_id."""
+        targets: list[RelayTarget] = []
+        for item in placements:
+            url = None
+            if live_urls is not None:
+                url = live_urls.get(item.relay_id)
+            if url is None:
+                url = await self.get_canonical_relay_base_url(item.relay_id)
+            if url is None:
+                url = item.registered_relay_base_url
+            targets.append(
                 RelayTarget(
                     role=item.role,
                     relay_id=item.relay_id,
-                    relay_base_url=item.relay_base_url,
-                )
-                for item in placements
-            ),
-        )
+                    relay_base_url=url,
+                ),
+            )
+        return TokenReserveResult(token=token, targets=tuple(targets))
 
     async def lock_tokens_with_block_hashes(
         self,
@@ -1242,11 +1307,11 @@ class RegistryRepository:
                 await db.execute(
                     """
                     INSERT INTO token_relay_placements (
-                        token, relay_id, relay_base_url, role,
+                        token, relay_id, registered_relay_base_url, role,
                         block_hash, expiry_at, updated_at
                     ) VALUES (?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(token, relay_id) DO UPDATE SET
-                        relay_base_url = excluded.relay_base_url,
+                        registered_relay_base_url = excluded.registered_relay_base_url,
                         role = excluded.role,
                         block_hash = excluded.block_hash,
                         expiry_at = excluded.expiry_at,
@@ -1264,12 +1329,21 @@ class RegistryRepository:
                 )
             await db.commit()
 
+        live_urls = {
+            item.relay_id: item.relay_base_url for item in await self.list_healthy_relays()
+        }
         locked: list[TokenReserveResult] = []
         for token, _block_hash in unique:
             placements = await self.get_token_placements(token)
             if not placements:
                 raise RuntimeError(f"failed to lock token placements: {token}")
-            locked.append(self._placements_to_reserve_result(token, placements))
+            locked.append(
+                await self._placements_to_reserve_result(
+                    token,
+                    placements,
+                    live_urls=live_urls,
+                ),
+            )
 
         await self.record_token_reservation_batch(
             entries=unique,
@@ -1297,22 +1371,22 @@ class RegistryRepository:
             return None
 
         healthy = await self.list_healthy_relays()
-        healthy_rates = {item.relay_id: item.storage_rate for item in healthy}
-        healthy_ids = set(healthy_rates)
+        healthy_by_id = {item.relay_id: item for item in healthy}
 
-        live_targets: list[RelayTarget] = []
         candidates: list[DownloadTargetCandidate] = []
         for item in placements:
-            if item.relay_id not in healthy_ids:
+            live = healthy_by_id.get(item.relay_id)
+            if live is None:
                 continue
             if not self.is_placement_live(item):
                 continue
+            # Emit current Public URL by relay_id; ignore placement URL snapshot.
             candidates.append(
                 DownloadTargetCandidate(
                     role=item.role,
                     relay_id=item.relay_id,
-                    relay_base_url=item.relay_base_url,
-                    storage_rate=healthy_rates.get(item.relay_id, 1.0),
+                    relay_base_url=live.relay_base_url,
+                    storage_rate=live.storage_rate,
                 ),
             )
 

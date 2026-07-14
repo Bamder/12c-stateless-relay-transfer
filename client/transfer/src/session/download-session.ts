@@ -72,11 +72,12 @@ function transportInFlight(transport: ReceiveTransport): number {
   return transport.inFlightCount?.() ?? 0;
 }
 
-function transportInFlightBytes(transport: ReceiveTransport): number {
+/** Wire bytes received but not yet consumed (in-flight + buffered pending). */
+function transportReceivedNotConsumedBytes(transport: ReceiveTransport): number {
   if (!(transport instanceof FetchReceiveTransport)) {
     return 0;
   }
-  return transport.getByteWindowSnapshot().windowBytesTransferred;
+  return transport.getReceivedWireBytesNotConsumed();
 }
 
 function downloadingStatus(
@@ -91,7 +92,8 @@ function downloadingStatus(
     transferBytesTotal !== undefined
       ? Math.min(
           transferBytesTotal,
-          completed * wireBlockSize + transportInFlightBytes(transport),
+          completed * wireBlockSize +
+            transportReceivedNotConsumedBytes(transport),
         )
       : undefined;
   return {
@@ -224,11 +226,15 @@ type DownloadActivityContext = {
   totalTokens: number;
   completed: number;
   wireBlockSize: number;
+  /** Initial prefetch lane count (before SMB). */
+  prefetchCount: number;
+  /** Max expected bytes for the initial prefetch window. */
+  prefetchBytesCeiling: number;
 };
 
 function downloadTransferBytes(
   context: DownloadActivityContext,
-  inFlightBytes: number,
+  receivedNotConsumedBytes: number,
 ): {
   transferBytesTransferred?: number;
   transferBytesTotal?: number;
@@ -245,8 +251,21 @@ function downloadTransferBytes(
     transferBytesTotal,
     transferBytesTransferred: Math.min(
       transferBytesTotal,
-      context.completed * context.wireBlockSize + inFlightBytes,
+      context.completed * context.wireBlockSize + receivedNotConsumedBytes,
     ),
+  };
+}
+
+function prefetchAwaitingStatus(
+  context: DownloadActivityContext,
+  inFlight: number,
+  receivedNotConsumedBytes: number,
+): DownloadStatusUpdate {
+  return {
+    phase: 'awaiting_metadata_block',
+    prefetchCount: Math.max(context.prefetchCount, inFlight, 1),
+    prefetchBytesReceived: receivedNotConsumedBytes,
+    prefetchBytesCeiling: context.prefetchBytesCeiling,
   };
 }
 
@@ -255,7 +274,7 @@ function mapTransportActivityToStatus(
   token0: string,
   context: DownloadActivityContext,
   inFlight: number,
-  inFlightBytes: number,
+  receivedNotConsumedBytes: number,
 ): DownloadStatusUpdate | null {
   switch (activity.kind) {
     case 'resolving':
@@ -271,13 +290,11 @@ function mapTransportActivityToStatus(
       };
     case 'download_started':
       if (!context.smbParsed) {
-        if (activity.token !== token0) {
-          return null;
-        }
-        return {
-          phase: 'awaiting_metadata_block',
-          prefetchCount: Math.max(1, inFlight),
-        };
+        return prefetchAwaitingStatus(
+          context,
+          inFlight,
+          receivedNotConsumedBytes,
+        );
       }
       if (context.totalTokens <= 0) {
         return null;
@@ -287,10 +304,17 @@ function mapTransportActivityToStatus(
         completed: context.completed,
         total: context.totalTokens,
         inFlight,
-        ...downloadTransferBytes(context, inFlightBytes),
+        ...downloadTransferBytes(context, receivedNotConsumedBytes),
       };
     case 'download_byte_progress':
-      if (!context.smbParsed || context.totalTokens <= 0) {
+      if (!context.smbParsed) {
+        return prefetchAwaitingStatus(
+          context,
+          inFlight,
+          activity.receivedBytesNotConsumed,
+        );
+      }
+      if (context.totalTokens <= 0) {
         return null;
       }
       return {
@@ -298,7 +322,7 @@ function mapTransportActivityToStatus(
         completed: context.completed,
         total: context.totalTokens,
         inFlight,
-        ...downloadTransferBytes(context, activity.windowBytesTransferred),
+        ...downloadTransferBytes(context, activity.receivedBytesNotConsumed),
       };
     case 'waiting':
       if (activity.token !== token0) {
@@ -325,14 +349,12 @@ function attachDownloadActivityListener(
   }
 
   transport.setActivityListener((activity) => {
-    const inFlightBytes =
-      transport.getByteWindowSnapshot().windowBytesTransferred;
     const status = mapTransportActivityToStatus(
       activity,
       token0,
       context,
       transport.inFlightCount(),
-      inFlightBytes,
+      transport.getReceivedWireBytesNotConsumed(),
     );
     if (status !== null) {
       onStatus(status);
@@ -368,15 +390,34 @@ export async function downloadAdaptive(
   const { searchCode } = splitCredential(credential);
   const token0 = twelveC.deriveUploadToken(searchCode, 0);
 
+  const prefetchBytesCeiling = estimatedM * relayMaxBodyBytes;
   const activityContext: DownloadActivityContext = {
     smbParsed: false,
     totalTokens: 0,
     completed: 0,
     wireBlockSize: 0,
+    prefetchCount: estimatedM,
+    prefetchBytesCeiling,
   };
   let transferBytesHighWater = 0;
+  let prefetchBytesHighWater = 0;
 
   const reportStatus = (status: DownloadStatusUpdate): void => {
+    if (status.phase === 'awaiting_metadata_block') {
+      const received = status.prefetchBytesReceived ?? 0;
+      prefetchBytesHighWater = Math.max(prefetchBytesHighWater, received);
+      onStatus?.({
+        ...status,
+        prefetchCount: Math.max(
+          status.prefetchCount ?? 0,
+          activityContext.prefetchCount,
+        ),
+        prefetchBytesReceived: prefetchBytesHighWater,
+        prefetchBytesCeiling:
+          status.prefetchBytesCeiling ?? activityContext.prefetchBytesCeiling,
+      });
+      return;
+    }
     if (status.phase === 'downloading') {
       activityContext.completed = status.completed;
       if (
@@ -415,10 +456,16 @@ export async function downloadAdaptive(
       total: estimatedM,
     });
     await yieldToBrowser();
+    // Until SMB reveals the true wire size, use Relay body ceiling for lane totals.
+    if (transport instanceof FetchReceiveTransport) {
+      transport.setExpectedWireBlockBytes(relayMaxBodyBytes);
+    }
     await prefetchIndexRange(transport, twelveC, searchCode, 0, estimatedM);
     reportStatus({
       phase: 'awaiting_metadata_block',
       prefetchCount: Math.max(estimatedM, transportInFlight(transport)),
+      prefetchBytesReceived: transportReceivedNotConsumedBytes(transport),
+      prefetchBytesCeiling,
     });
 
     const token0Wire = cloneWireBlock(await transport.get(token0));

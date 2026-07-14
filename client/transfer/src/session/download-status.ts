@@ -14,7 +14,17 @@ export type DownloadStatusUpdate =
       total: number;
     }
   /** 含 SMB 元数据的线区块正在传输（与其它块并行，非单独优先） */
-  | { phase: 'awaiting_metadata_block'; prefetchCount?: number }
+  | {
+      phase: 'awaiting_metadata_block';
+      prefetchCount?: number;
+      /** Prefetch window bytes received so far (in-flight + buffered). */
+      prefetchBytesReceived?: number;
+      /**
+       * Prefetch window byte ceiling before SMB is known
+       * (≈ prefetchCount × relayMaxBodyBytes).
+       */
+      prefetchBytesCeiling?: number;
+    }
   | {
       phase: 'waiting_metadata_block';
       reason: 'registry' | 'relay';
@@ -29,7 +39,7 @@ export type DownloadStatusUpdate =
       inFlight?: number;
       /**
        * Whole-download wire progress (monotonic after SMB).
-       * ≈ completed×wireBlockSize + in-flight streaming bytes.
+       * ≈ completed×wireBlockSize + in-flight streaming + buffered pending.
        */
       transferBytesTransferred?: number;
       /** Expected total wire bytes ≈ total×wireBlockSize (stable after SMB). */
