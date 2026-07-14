@@ -10,7 +10,7 @@
     <link rel="preconnect" href="http://127.0.0.1:8080" />
     <link rel="dns-prefetch" href="http://127.0.0.1:8080" />
     <!-- 预加载 WASM 加密模块 -->
-    <link rel="modulepreload" href="/wasm/twelve_c_cryptography.js" />
+    <link rel="modulepreload" href="./wasm/twelve_c_cryptography.js" />
     <!-- 内联启动屏关键 CSS，消除白屏闪烁 -->
     <style>
       :root{color-scheme:light;--bg:#ffffff;--surface:#f8fafc;--surface2:#f1f5f9;--border:#e2e8f0;--text:#1e293b;--text-strong:#0f172a;--muted:#64748b;--accent:#0369a1;--accent-dim:#0c4a6e;--radius:10px;font-family:"Segoe UI",system-ui,sans-serif}
@@ -177,6 +177,52 @@
           <div id="send-error" class="banner error hidden"></div>
           <div id="send-info" class="banner info hidden"></div>
           <div class="card send-card">
+            <div class="send-ttl-section">
+              <span class="field-label send-ttl-title">文件与二维码有效期</span>
+              <div class="duration-input-row">
+                <label class="duration-field">
+                  <input
+                    id="file-ttl-hours"
+                    type="number"
+                    min="0"
+                    max="24"
+                    inputmode="numeric"
+                    placeholder="0-24"
+                  />
+                  <span class="duration-unit">时</span>
+                </label>
+                <label class="duration-field">
+                  <input
+                    id="file-ttl-minutes"
+                    type="number"
+                    min="0"
+                    max="59"
+                    inputmode="numeric"
+                    placeholder="0-59"
+                  />
+                  <span class="duration-unit">分</span>
+                </label>
+                <label class="duration-field">
+                  <input
+                    id="file-ttl-seconds"
+                    type="number"
+                    min="0"
+                    max="59"
+                    inputmode="numeric"
+                    placeholder="0-59"
+                  />
+                  <span class="duration-unit">秒</span>
+                </label>
+                <button id="confirm-file-ttl-btn" type="button" class="ghost-btn duration-confirm-btn">
+                  确认
+                </button>
+              </div>
+              <p class="hint hint-small">
+                当前有效期：<span id="file-ttl-current">1小时0分钟0秒</span>；从上传预留时开始计算，
+                可设置 1 秒至 24 小时。
+              </p>
+            </div>
+
             <div class="send-row">
               <label id="send-file-dropzone" class="file-dropzone" for="send-file-input">
                 <input id="send-file-input" type="file" class="file-input-hidden" />
@@ -225,6 +271,51 @@
               </div>
               <div id="send-credential-slots" class="credential-slots"></div>
             </div>
+
+            <section
+              id="send-share-section"
+              class="send-share-section hidden"
+              aria-labelledby="send-share-title"
+            >
+              <div class="send-share-header">
+                <div>
+                  <h2 id="send-share-title" class="send-share-title">扫码接收文件</h2>
+                  <p id="send-share-ttl" class="send-share-ttl" aria-live="polite"></p>
+                </div>
+                <p id="send-share-warning" class="send-share-warning hidden" role="alert"></p>
+              </div>
+              <div class="send-share-layout">
+                <div class="send-share-qr-frame">
+                  <div
+                    id="send-share-qr"
+                    class="send-share-qr"
+                    role="img"
+                    aria-label="文件接收二维码"
+                  ></div>
+                </div>
+                <div class="send-share-details">
+                  <label class="field-label" for="send-share-link-output">接收链接</label>
+                  <input
+                    id="send-share-link-output"
+                    class="send-share-link-output"
+                    type="url"
+                    readonly
+                    aria-label="只读接收链接"
+                  />
+                  <div class="send-share-actions">
+                    <button id="copy-receive-link-btn" type="button" class="ghost-btn">
+                      复制接收链接
+                    </button>
+                    <button id="download-receive-qr-btn" type="button" class="ghost-btn">
+                      保存二维码
+                    </button>
+                  </div>
+                  <p class="send-share-security-note">
+                    二维码等同于完整的文件提取凭证。请仅分享给可信接收方，并在有效期结束前妥善保管。
+                  </p>
+                </div>
+              </div>
+            </section>
 
             <div class="send-upload-progress">
               <div class="progress-label">
@@ -342,21 +433,23 @@
               </div>
 
               <div class="receive-file-area">
-                <div
+                <button
                   id="receive-file-bar"
                   class="receive-file-bar receive-file-bar--pending"
-                  role="presentation"
+                  type="button"
+                  disabled
+                  aria-live="polite"
                 >
-                <span id="receive-file-pending" class="receive-file-pending">等待下载</span>
-                <span id="receive-file-ready" class="receive-file-ready hidden">
-                  <span id="receive-file-icon" class="file-icon" aria-hidden="true"></span>
-                  <span id="receive-file-name" class="file-name"></span>
-                  <span id="receive-file-size" class="file-size"></span>
-                </span>
-                <span id="receive-file-save-hint" class="receive-file-save-hint hidden"
-                  >点击保存到本地</span
-                >
-              </div>
+                  <span id="receive-file-pending" class="receive-file-pending">等待下载</span>
+                  <span id="receive-file-ready" class="receive-file-ready hidden">
+                    <span id="receive-file-icon" class="file-icon" aria-hidden="true"></span>
+                    <span id="receive-file-name" class="file-name"></span>
+                    <span id="receive-file-size" class="file-size"></span>
+                  </span>
+                  <span id="receive-file-save-hint" class="receive-file-save-hint hidden"
+                    >点击保存到本地</span
+                  >
+                </button>
               </div>
             </div>
           </div>
@@ -383,51 +476,6 @@
             <div class="button-row">
               <button id="save-settings-btn" type="button" class="primary-btn">保存并重连</button>
               <button id="reset-settings-btn" type="button" class="ghost-btn">恢复默认</button>
-            </div>
-
-            <div class="settings-section settings-section--ttl">
-              <span class="field-label">文件有效时间</span>
-              <div class="duration-input-row">
-                <label class="duration-field">
-                  <input
-                    id="file-ttl-hours"
-                    type="number"
-                    min="0"
-                    max="24"
-                    inputmode="numeric"
-                    placeholder="0-24"
-                  />
-                  <span class="duration-unit">时</span>
-                </label>
-                <label class="duration-field">
-                  <input
-                    id="file-ttl-minutes"
-                    type="number"
-                    min="0"
-                    max="59"
-                    inputmode="numeric"
-                    placeholder="0-59"
-                  />
-                  <span class="duration-unit">分</span>
-                </label>
-                <label class="duration-field">
-                  <input
-                    id="file-ttl-seconds"
-                    type="number"
-                    min="0"
-                    max="59"
-                    inputmode="numeric"
-                    placeholder="0-59"
-                  />
-                  <span class="duration-unit">秒</span>
-                </label>
-                <button id="confirm-file-ttl-btn" type="button" class="ghost-btn duration-confirm-btn">
-                  确认
-                </button>
-              </div>
-              <p class="hint hint-small">
-                当前上传文件的有效期为：<span id="file-ttl-current">1小时0分钟0秒</span>
-              </p>
             </div>
 
             <div class="settings-section settings-section--credential-style">

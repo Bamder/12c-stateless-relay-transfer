@@ -145,6 +145,9 @@ function Ensure-EmscriptenActive {
     ) | Where-Object { $_ -and $_.Trim() -ne "" } | Select-Object -Unique
 
     foreach ($root in $roots) {
+        if (-not (Test-Path -LiteralPath $root)) {
+            continue
+        }
         $envScript = Join-Path $root "emsdk_env.ps1"
         if (Test-Path $envScript) {
             Write-Host "Activating emsdk from $root ..."

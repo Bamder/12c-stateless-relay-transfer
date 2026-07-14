@@ -3,6 +3,7 @@ import {
   decodeSegmentPlaintextBytesV21,
   loadTransferConfigFromUrl,
   loadTwelveC,
+  parseTransferConfig,
   resolveRegistryBaseUrl,
   resolveRelayMaxBodyBytes,
   resolveEffectiveWireBlockBytes,
@@ -17,10 +18,17 @@ import {
 } from '@stateless-relay/transfer';
 import { DEFAULT_FILE_TTL_SECONDS } from './file-ttl.js';
 
+declare const __BUNDLED_TRANSFER_CONFIG__: unknown;
+
 const REGISTRY_URL_STORAGE_KEY = 'stateless-relay.registryUrl';
 const FILE_TTL_SECONDS_STORAGE_KEY = 'stateless-relay.fileTtlSeconds';
-const WASM_JS_URL = '/wasm/twelve_c_cryptography.js';
-const WASM_BINARY_URL = '/wasm/twelve_c_cryptography.wasm';
+
+function resolveClientAssetUrl(relativePath: string): string {
+  return new URL(relativePath, document.baseURI).toString();
+}
+
+const WASM_JS_URL = resolveClientAssetUrl('wasm/twelve_c_cryptography.js');
+const WASM_BINARY_URL = resolveClientAssetUrl('wasm/twelve_c_cryptography.wasm');
 
 export interface ClientRuntime {
   twelveC: TwelveCClient;
@@ -91,14 +99,17 @@ export function readStoredFileTtlSeconds(): number | null {
     return null;
   }
   const parsed = Number.parseInt(raw, 10);
-  if (!Number.isFinite(parsed) || parsed < 0) {
+  if (!Number.isFinite(parsed) || parsed < 1) {
     return null;
   }
   return Math.min(parsed, 24 * 60 * 60);
 }
 
 export function saveStoredFileTtlSeconds(seconds: number): void {
-  localStorage.setItem(FILE_TTL_SECONDS_STORAGE_KEY, String(Math.max(0, Math.trunc(seconds))));
+  localStorage.setItem(
+    FILE_TTL_SECONDS_STORAGE_KEY,
+    String(Math.max(1, Math.trunc(seconds))),
+  );
 }
 
 export function clearStoredFileTtlSeconds(): void {
@@ -110,7 +121,13 @@ export function getEffectiveFileTtlSeconds(): number {
 }
 
 export async function loadEffectiveConfig(): Promise<TransferConfig> {
-  const config = await loadTransferConfigFromUrl('/relay.config.json');
+  // Electron loads the production client over file://, where renderer fetch
+  // cannot read the adjacent JSON. Vite injects the same public config at build time.
+  const config = document.location.protocol === 'file:'
+    ? parseTransferConfig(__BUNDLED_TRANSFER_CONFIG__)
+    : await loadTransferConfigFromUrl(
+        resolveClientAssetUrl('relay.config.json'),
+      );
   const storedUrl = readStoredRegistryUrl();
   if (storedUrl) {
     config.registry.url = storedUrl;

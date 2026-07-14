@@ -70,6 +70,7 @@ Set-Location $ClientRoot
 Write-Step '安装 npm 依赖 (workspaces)'
 if (-not (Test-Path (Join-Path $ClientRoot "node_modules"))) {
     npm install
+    if ($LASTEXITCODE -ne 0) { throw "npm install failed" }
 } else {
     Write-Host 'node_modules 已存在，跳过 npm install'
 }
@@ -109,10 +110,12 @@ if ($needWasm) {
 Write-Step '复制 WASM -> web/public/wasm/'
 Set-Location $WebDir
 npm run copy:wasm
+if ($LASTEXITCODE -ne 0) { throw "copy:wasm failed" }
 
 if ($Production) {
     Write-Step 'Vite 生产构建 -> web/dist/'
     npm run build
+    if ($LASTEXITCODE -ne 0) { throw "Vite production build failed" }
     Write-Host ''
     Write-Host "完成。静态产物: $WebDir\dist\" -ForegroundColor Green
 } else {

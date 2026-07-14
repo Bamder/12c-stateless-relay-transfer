@@ -1,13 +1,23 @@
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
+const bundledTransferConfig = JSON.parse(
+  readFileSync(path.join(root, 'public/relay.config.json'), 'utf8'),
+) as unknown;
 
 export default defineConfig(({ mode }) => {
   const isProduction = mode === 'production';
 
   return {
+    // Keep the production client relocatable so a Registry can host it below
+    // an origin path such as /services/registry/.
+    base: './',
+    define: {
+      __BUNDLED_TRANSFER_CONFIG__: JSON.stringify(bundledTransferConfig),
+    },
     server: {
       port: 5173,
       open: true,

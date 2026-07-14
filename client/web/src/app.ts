@@ -20,6 +20,7 @@ import {
   type UploadReservationMeta,
   type DownloadStatusUpdate,
   type BlockHashEntry,
+  type UploadMap,
 } from '@stateless-relay/transfer';
 import type { ClientRuntime } from './runtime.js';
 import {
@@ -53,6 +54,12 @@ import {
   getEffectiveCredentialStyle,
   saveStoredCredentialStyle,
 } from './credential-style-settings.js';
+import {
+  buildReceiveUrl,
+  parseReceiveIntent,
+  type ReceiveUrlWarning,
+} from './qr-share-link.js';
+import { copyShareText, createQrSvg, downloadQrSvg } from './qr-share.js';
 
 // ============================================================================
 // 类型定义
@@ -86,6 +93,13 @@ interface Elements {
   sendProgressBar: HTMLElement;
   sendCredentialSlots: HTMLElement;
   copyCredentialBtn: HTMLButtonElement;
+  sendShareSection: HTMLElement;
+  sendShareTtl: HTMLElement;
+  sendShareWarning: HTMLElement;
+  sendShareQr: HTMLElement;
+  sendShareLinkOutput: HTMLInputElement;
+  copyReceiveLinkBtn: HTMLButtonElement;
+  downloadReceiveQrBtn: HTMLButtonElement;
   receiveCredentialSlots: HTMLElement;
   pasteReceiveCredentialBtn: HTMLButtonElement;
   receiveDownloadBtn: HTMLButtonElement;
@@ -96,7 +110,7 @@ interface Elements {
   receiveDownloadSpinner: HTMLElement;
   receiveDownloadStatusText: HTMLElement;
   receiveDownloadProgressText: HTMLElement;
-  receiveFileBar: HTMLElement;
+  receiveFileBar: HTMLButtonElement;
   receiveFilePending: HTMLElement;
   receiveFileReady: HTMLElement;
   receiveFileIcon: HTMLElement;
@@ -136,6 +150,8 @@ let receiveCredentialInput: ReceiveCredentialInput | null = null;
 let receivedFile: { fileName: string; data: Blob } | null = null;
 let receiveDownloading = false;
 let sendInProgress = false;
+let sendShareState: { receiveUrl: string } | null = null;
+let receiveIntentConsumed = false;
 /** 加密阶段进度条比例，保证只增不减，避免 UI 来回晃 */
 let sendPrepareProgressRatio = 0;
 
@@ -208,6 +224,13 @@ function collectElements(): Elements {
     sendProgressBar: $('send-progress-bar'),
     sendCredentialSlots: $('send-credential-slots'),
     copyCredentialBtn: $('copy-credential-btn') as HTMLButtonElement,
+    sendShareSection: $('send-share-section'),
+    sendShareTtl: $('send-share-ttl'),
+    sendShareWarning: $('send-share-warning'),
+    sendShareQr: $('send-share-qr'),
+    sendShareLinkOutput: $('send-share-link-output') as HTMLInputElement,
+    copyReceiveLinkBtn: $('copy-receive-link-btn') as HTMLButtonElement,
+    downloadReceiveQrBtn: $('download-receive-qr-btn') as HTMLButtonElement,
     receiveCredentialSlots: $('receive-credential-slots'),
     pasteReceiveCredentialBtn: $('paste-receive-credential-btn') as HTMLButtonElement,
     receiveDownloadBtn: $('receive-download-btn') as HTMLButtonElement,
@@ -224,7 +247,7 @@ function collectElements(): Elements {
     receiveDownloadSpinner: $('receive-download-spinner'),
     receiveDownloadStatusText: $('receive-download-status-text'),
     receiveDownloadProgressText: $('receive-download-progress-text'),
-    receiveFileBar: $('receive-file-bar'),
+    receiveFileBar: $('receive-file-bar') as HTMLButtonElement,
     receiveFilePending: $('receive-file-pending'),
     receiveFileReady: $('receive-file-ready'),
     receiveFileIcon: $('receive-file-icon'),
@@ -370,6 +393,10 @@ function showUploadStamp(): void {
 function updateSendControls(): void {
   el.sendBtn.disabled = sendInProgress || !selectedFile;
   el.sendFileInput.disabled = sendInProgress;
+  el.fileTtlHoursInput.disabled = sendInProgress;
+  el.fileTtlMinutesInput.disabled = sendInProgress;
+  el.fileTtlSecondsInput.disabled = sendInProgress;
+  el.confirmFileTtlBtn.disabled = sendInProgress;
   el.sendFileDropzone.classList.toggle('is-disabled', sendInProgress);
   el.sendFileDropzone.toggleAttribute('aria-disabled', sendInProgress);
 }
@@ -520,10 +547,71 @@ function resetSendCredential(): void {
   el.copyCredentialBtn.disabled = true;
 }
 
+function clearSendShare(): void {
+  sendShareState = null;
+  el.sendShareSection.classList.add('hidden');
+  el.sendShareTtl.textContent = '';
+  el.sendShareWarning.textContent = '';
+  el.sendShareWarning.classList.add('hidden');
+  el.sendShareQr.replaceChildren();
+  el.sendShareLinkOutput.value = '';
+  el.copyReceiveLinkBtn.disabled = true;
+  el.copyReceiveLinkBtn.textContent = '复制接收链接';
+  el.downloadReceiveQrBtn.disabled = true;
+}
+
+function formatShareWarnings(warnings: readonly ReceiveUrlWarning[]): string {
+  const messages: string[] = [];
+  if (warnings.includes('loopback')) {
+    messages.push('当前 Registry 是本机回环地址，其他设备通常无法访问此二维码。');
+  }
+  if (warnings.includes('insecure')) {
+    messages.push('当前链接使用 HTTP；公网分享请改用 HTTPS，避免提取凭证被窃取。');
+  }
+  return messages.join(' ');
+}
+
+function showSendShare(
+  credential: string,
+  requestedTtlSeconds: number,
+  reservation: UploadReservationMeta | undefined,
+): void {
+  clearSendShare();
+  el.sendShareSection.classList.remove('hidden');
+
+  const grantedTtlSeconds =
+    reservation?.grantedTtlSeconds ?? requestedTtlSeconds;
+  el.sendShareTtl.textContent =
+    `服务器实际有效时长：${formatDurationLabel(grantedTtlSeconds)}` +
+    '（从上传预留时开始计时）';
+
+  try {
+    const client = requireRuntime();
+    const receiveUrl = buildReceiveUrl(client.registryUrl, credential);
+    const qrSvg = createQrSvg(receiveUrl.url);
+    sendShareState = { receiveUrl: receiveUrl.url };
+    el.sendShareLinkOutput.value = receiveUrl.url;
+    el.sendShareQr.innerHTML = qrSvg;
+    el.copyReceiveLinkBtn.disabled = false;
+    el.downloadReceiveQrBtn.disabled = false;
+
+    const warning = formatShareWarnings(receiveUrl.warnings);
+    if (warning) {
+      el.sendShareWarning.textContent = warning;
+      el.sendShareWarning.classList.remove('hidden');
+    }
+  } catch (error) {
+    el.sendShareWarning.textContent =
+      `文件已上传，但无法生成可扫码链接：${formatUnknownError(error)}`;
+    el.sendShareWarning.classList.remove('hidden');
+  }
+}
+
 function resetSendPanel(): void {
   resetSendCredential();
   resetSendProgress();
   clearUploadStamp();
+  clearSendShare();
 }
 
 function formatUploadReservationDegradedMessage(
@@ -561,6 +649,16 @@ async function handleSend(): Promise<void> {
     return;
   }
 
+  const ttlParts = readDurationInputs();
+  if (ttlParts.totalSeconds <= 0) {
+    showBanner(el.sendError, '文件与二维码有效期必须大于 0 秒');
+    return;
+  }
+  applyDurationPartsToInputs(ttlParts);
+  saveStoredFileTtlSeconds(ttlParts.totalSeconds);
+  updateFileTtlCurrentLabel(ttlParts.totalSeconds);
+  const requestedTtlSeconds = ttlParts.totalSeconds;
+
   const client = requireRuntime();
   const display = credentialDisplay;
   if (!display) {
@@ -572,24 +670,26 @@ async function handleSend(): Promise<void> {
   updateSendControls();
   display.startBreathing();
 
-  const useStreamingUpload =
-    selectedFile.size > V21_WHOLE_FILE_THRESHOLD_BYTES;
-  const bytesPromise = useStreamingUpload
-    ? Promise.resolve(selectedFile.size)
-    : selectedFile.arrayBuffer().then((buffer) => new Uint8Array(buffer));
-  if (!useStreamingUpload) {
-    setSendUploadStatus({ phase: 'reading' });
-  }
-  await display.enterReelWhenReady(
-    bytesPromise,
-    useStreamingUpload ? BREATHING_MIN_STREAMING_MS : BREATHING_MIN_MS,
-  );
-  const bytes = useStreamingUpload ? null : await bytesPromise;
-
-  const maxAttempts = DEFAULT_MAX_RESERVATION_ATTEMPTS;
-  let lastOccupiedTokens: OccupiedTokenInfo[] = [];
-
   try {
+    const useStreamingUpload =
+      selectedFile.size > V21_WHOLE_FILE_THRESHOLD_BYTES;
+    const bytesPromise = useStreamingUpload
+      ? Promise.resolve(selectedFile.size)
+      : selectedFile.arrayBuffer().then((buffer) => new Uint8Array(buffer));
+    if (!useStreamingUpload) {
+      setSendUploadStatus({ phase: 'reading' });
+    }
+    await display.enterReelWhenReady(
+      bytesPromise,
+      useStreamingUpload ? BREATHING_MIN_STREAMING_MS : BREATHING_MIN_MS,
+    );
+    const bytes = useStreamingUpload
+      ? null
+      : ((await bytesPromise) as Uint8Array);
+
+    const maxAttempts = DEFAULT_MAX_RESERVATION_ATTEMPTS;
+    let lastOccupiedTokens: OccupiedTokenInfo[] = [];
+
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       const credential = generateCredential(getEffectiveCredentialStyle());
 
@@ -636,7 +736,7 @@ async function handleSend(): Promise<void> {
           client.stack.uploadClient,
           {
             registry: client.stack.registry,
-            ttlSeconds: getEffectiveFileTtlSeconds(),
+            ttlSeconds: requestedTtlSeconds,
             precomputedBlockHashes: blockHashes,
           },
           (status: UploadStatusUpdate) => {
@@ -655,6 +755,7 @@ async function handleSend(): Promise<void> {
           );
         }
 
+        showSendShare(credential, requestedTtlSeconds, reservation);
         showUploadStamp();
         void replicaSync?.catch(() => {
           /* replica 后台补传失败不影响主流程 */
@@ -697,12 +798,19 @@ function saveBlob(filename: string, data: Blob): void {
   const anchor = document.createElement('a');
   anchor.href = url;
   anchor.download = filename;
-  anchor.click();
-  URL.revokeObjectURL(url);
+  anchor.hidden = true;
+  document.body.appendChild(anchor);
+  try {
+    anchor.click();
+  } finally {
+    anchor.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
 }
 
 function resetReceiveFileBar(): void {
   receivedFile = null;
+  el.receiveFileBar.disabled = true;
   el.receiveFileBar.classList.remove('receive-file-bar--ready');
   el.receiveFileBar.classList.add('receive-file-bar--pending');
   el.receiveFileBar.classList.remove('is-clickable');
@@ -1034,13 +1142,21 @@ function updateReceiveDownloadButton(): void {
   el.receiveDownloadBtn.disabled = !complete;
 }
 
-function showReceivedFile(fileName: string, data: Blob): void {
+function showReceivedFile(
+  fileName: string,
+  data: Blob,
+  autoSaveAttempted = false,
+): void {
   receivedFile = { fileName, data };
+  el.receiveFileBar.disabled = false;
   el.receiveFileBar.classList.remove('receive-file-bar--pending');
   el.receiveFileBar.classList.add('receive-file-bar--ready', 'is-clickable');
   el.receiveFilePending.classList.add('hidden');
   el.receiveFileReady.classList.remove('hidden');
   el.receiveFileSaveHint.classList.remove('hidden');
+  el.receiveFileSaveHint.textContent = autoSaveAttempted
+    ? '已尝试自动保存；若浏览器未保存，请点击此处'
+    : '点击保存到本地';
   renderFileIconForName(el.receiveFileIcon, fileName);
   el.receiveFileName.textContent = fileName;
   el.receiveFileSize.textContent = formatBytes(data.size);
@@ -1054,7 +1170,12 @@ function handleSaveReceivedFile(): void {
   saveBlob(receivedFile.fileName, receivedFile.data);
 }
 
-async function handleReceiveDownload(): Promise<void> {
+async function handleReceiveDownload(
+  options: { autoSave?: boolean } = {},
+): Promise<void> {
+  if (receiveDownloading) {
+    return;
+  }
   clearBanner(el.receiveError);
   const credential = receiveCredentialInput?.getValue() ?? '';
   if (credential.length !== CREDENTIAL_LENGTH) {
@@ -1074,7 +1195,15 @@ async function handleReceiveDownload(): Promise<void> {
       relayMaxBodyBytes: client.relayMaxBodyBytes,
       onStatus: (status) => setReceiveDownloadProgress(status),
     });
-    showReceivedFile(received.fileName, received.data);
+    showReceivedFile(received.fileName, received.data, options.autoSave === true);
+    if (options.autoSave) {
+      try {
+        saveBlob(received.fileName, received.data);
+      } catch (saveError) {
+        console.warn('[receive] automatic save was blocked:', saveError);
+        el.receiveFileSaveHint.textContent = '浏览器未能自动保存，请点击此处';
+      }
+    }
   } catch (error) {
     console.error('[receive] download failed:', error);
     const message = formatUnknownError(error);
@@ -1115,19 +1244,19 @@ function readDurationInputs(): ReturnType<typeof clampDurationParts> {
 }
 
 function handleConfirmFileTtl(): void {
-  clearBanner(el.settingsError);
-  clearBanner(el.settingsInfo);
+  clearBanner(el.sendError);
+  clearBanner(el.sendInfo);
 
   const parts = readDurationInputs();
   if (parts.totalSeconds <= 0) {
-    showBanner(el.settingsError, '文件有效时间必须大于 0 秒');
+    showBanner(el.sendError, '文件与二维码有效期必须大于 0 秒');
     return;
   }
 
   applyDurationPartsToInputs(parts);
   saveStoredFileTtlSeconds(parts.totalSeconds);
   updateFileTtlCurrentLabel(parts.totalSeconds);
-  showBanner(el.settingsInfo, '文件有效时间已更新。');
+  showBanner(el.sendInfo, '文件与二维码有效期已更新。');
 }
 
 // ============================================================================
@@ -1225,6 +1354,7 @@ async function handleSaveSettings(): Promise<void> {
 
   try {
     await reloadRuntime();
+    clearSendShare();
     showApp();
     showBanner(el.settingsInfo, '已保存并重连 Registry。');
     if (activePanel !== 'settings') {
@@ -1272,6 +1402,77 @@ async function copyCredential(): Promise<void> {
   }
   await navigator.clipboard.writeText(value);
   showBanner(el.sendInfo, '凭证已复制到剪贴板。');
+}
+
+async function copyReceiveLink(): Promise<void> {
+  const state = sendShareState;
+  if (!state) {
+    return;
+  }
+
+  clearBanner(el.sendError);
+  try {
+    await copyShareText(state.receiveUrl);
+    el.copyReceiveLinkBtn.textContent = '已复制';
+    window.setTimeout(() => {
+      if (sendShareState === state) {
+        el.copyReceiveLinkBtn.textContent = '复制接收链接';
+      }
+    }, 1600);
+  } catch (error) {
+    showBanner(el.sendError, `复制接收链接失败：${formatUnknownError(error)}`);
+  }
+}
+
+function downloadReceiveQr(): void {
+  if (!sendShareState) {
+    return;
+  }
+  clearBanner(el.sendError);
+  try {
+    downloadQrSvg(el.sendShareQr);
+  } catch (error) {
+    showBanner(el.sendError, `保存二维码失败：${formatUnknownError(error)}`);
+  }
+}
+
+function clearConsumedReceiveHash(): void {
+  const cleanUrl = new URL(window.location.href);
+  cleanUrl.hash = '';
+  window.history.replaceState(window.history.state, '', cleanUrl.toString());
+}
+
+async function consumeReceiveLinkIntent(): Promise<void> {
+  if (receiveIntentConsumed) {
+    return;
+  }
+
+  const intent = parseReceiveIntent(window.location.hash);
+  if (intent.kind === 'none') {
+    return;
+  }
+
+  receiveIntentConsumed = true;
+  clearConsumedReceiveHash();
+  switchPanel('receive');
+
+  if (intent.kind === 'invalid') {
+    showBanner(el.receiveError, '接收链接无效或已损坏，请让发送方重新生成二维码。');
+    return;
+  }
+
+  receiveCredentialInput?.applyCredential(intent.credential);
+  if (!receiveCredentialInput?.isComplete()) {
+    showBanner(el.receiveError, '接收链接中的凭证无效，请让发送方重新生成二维码。');
+    return;
+  }
+
+  if (intent.autoDownload) {
+    await handleReceiveDownload({ autoSave: true });
+    return;
+  }
+
+  el.receiveDownloadBtn.focus();
 }
 
 // ============================================================================
@@ -1367,6 +1568,14 @@ function bindEvents(): void {
     void copyCredential();
   });
 
+  el.copyReceiveLinkBtn.addEventListener('click', () => {
+    void copyReceiveLink();
+  });
+
+  el.downloadReceiveQrBtn.addEventListener('click', () => {
+    downloadReceiveQr();
+  });
+
   el.pasteReceiveCredentialBtn.addEventListener('click', () => {
     void pasteReceiveCredential();
   });
@@ -1385,6 +1594,7 @@ export async function startApp(): Promise<void> {
     updateReceiveDownloadButton();
     clearBanner(el.receiveError);
   });
+  clearSendShare();
   resetReceiveFileBar();
   updateReceiveDownloadButton();
   syncFileTtlSettingsUi();
@@ -1396,6 +1606,7 @@ export async function startApp(): Promise<void> {
     await reloadRuntime();
     setBootProgress(1, '就绪');
     showApp();
+    await consumeReceiveLinkIntent();
   } catch (error) {
     const message = formatUnknownError(error);
     el.bootStatus.textContent = `启动失败：${message}`;
