@@ -66,6 +66,7 @@ const el = {
   relayPublicUrlForm: document.getElementById("relay-public-url-form"),
   relayPublicUrlError: document.getElementById("relay-public-url-error"),
   fillLocalRelayUrlBtn: document.getElementById("fill-local-relay-url-btn"),
+  relayRestartModeControl: document.getElementById("relay-restart-mode-control"),
   contextMenu: document.getElementById("context-menu"),
   dbContextMenu: document.getElementById("db-context-menu"),
   serviceContextMenu: document.getElementById("service-context-menu"),
@@ -1688,6 +1689,27 @@ async function openRelayPublicUrlDialog() {
     showError(el.relayPublicUrlError, `读取 Relay 配置失败：${error.message}`);
   }
   el.relayPublicUrlDialog.showModal();
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      updateSegmentedSlider(el.relayRestartModeControl);
+    });
+  });
+}
+
+function updateSegmentedSlider(controlEl) {
+  if (!controlEl) return;
+  const slider = controlEl.querySelector(".segmented-slider");
+  const checked = controlEl.querySelector('input[type="radio"]:checked');
+  const option = checked?.closest(".segmented-option");
+  if (!slider || !option) return;
+
+  const controlRect = controlEl.getBoundingClientRect();
+  const optionRect = option.getBoundingClientRect();
+  const left = optionRect.left - controlRect.left;
+  const width = optionRect.width;
+
+  slider.style.width = `${width}px`;
+  slider.style.transform = `translateX(${left}px)`;
 }
 
 async function fillLocalRelayListenUrl() {
@@ -1706,11 +1728,13 @@ async function fillLocalRelayListenUrl() {
   }
 }
 
-async function submitRelayPublicUrl(publicBaseUrl) {
+async function submitRelayPublicUrl(publicBaseUrl, { detached = false } = {}) {
   clearError(el.relayError);
   clearInfo(el.relayInfo);
   const submitBtn = el.relayPublicUrlForm.querySelector('button[type="submit"]');
+  const restartModeControl = el.relayRestartModeControl;
   if (submitBtn) submitBtn.disabled = true;
+  restartModeControl?.classList.add("segmented-control--disabled");
   try {
     const relayId = state.lastRelayOverview?.relay?.relayId;
     const body = { publicBaseUrl };
@@ -1722,11 +1746,19 @@ async function submitRelayPublicUrl(publicBaseUrl) {
       body: JSON.stringify(body),
     });
     el.relayPublicUrlDialog.close();
-    let message = "Public URL 已保存。请重启 Relay 使新地址在运行进程中生效。";
+
+    const restarted = await restartService("relay", { detached, confirm: false });
+    const modeLabel = detached ? "独立进程" : "托管进程";
+    let message = restarted
+      ? `Public URL 已保存，Relay 已以${modeLabel}方式重启。`
+      : "Public URL 已保存。";
     if (result.allowlistSynced) {
       message += " Registry Allowlist 已同步更新。";
     } else if (relayId) {
       message += " Registry Allowlist 未能同步（可稍后在 Registry 面板手动更新）。";
+    }
+    if (!restarted) {
+      message += ` 请手动以${modeLabel}方式重启 Relay。`;
     }
     showInfo(el.relayInfo, message);
     await loadRelayPanel();
@@ -1738,6 +1770,7 @@ async function submitRelayPublicUrl(publicBaseUrl) {
     showError(el.relayPublicUrlError, detail);
   } finally {
     if (submitBtn) submitBtn.disabled = false;
+    restartModeControl?.classList.remove("segmented-control--disabled");
   }
 }
 
@@ -2095,14 +2128,14 @@ async function stopService(name, { confirm = true } = {}) {
   }
 }
 
-async function restartService(name, { detached = false } = {}) {
+async function restartService(name, { detached = false, confirm = true } = {}) {
   if (state.servicePending[name]) {
-    return;
+    return false;
   }
 
   const modeLabel = detached ? "独立进程" : "托管";
-  if (!window.confirm(`确定以${modeLabel}方式重启 ${serviceLabel(name)}？`)) {
-    return;
+  if (confirm && !window.confirm(`确定以${modeLabel}方式重启 ${serviceLabel(name)}？`)) {
+    return false;
   }
 
   const { errorEl } = serviceElements(name);
@@ -2119,10 +2152,12 @@ async function restartService(name, { detached = false } = {}) {
     state.servicePending[name] = null;
     await loadServiceStatus();
     await refreshActivePanel();
+    return true;
   } catch (error) {
     state.servicePending[name] = null;
     await loadServiceStatus();
     showError(errorEl, `${serviceLabel(name)} 重启失败：${error.message}`);
+    return false;
   }
 }
 
@@ -2297,13 +2332,28 @@ el.fillLocalRelayUrlBtn.addEventListener("click", () => {
   });
 });
 
+el.relayRestartModeControl?.addEventListener("change", (event) => {
+  if (event.target.name === "restartMode") {
+    updateSegmentedSlider(el.relayRestartModeControl);
+  }
+});
+
+el.relayRestartModeControl?.addEventListener("click", (event) => {
+  const option = event.target.closest(".segmented-option");
+  if (!option) return;
+  requestAnimationFrame(() => {
+    updateSegmentedSlider(el.relayRestartModeControl);
+  });
+});
+
 el.relayPublicUrlForm.addEventListener("submit", (event) => {
   event.preventDefault();
   clearError(el.relayPublicUrlError);
   const form = new FormData(el.relayPublicUrlForm);
   const publicBaseUrl = String(form.get("publicBaseUrl") || "").trim();
   if (!publicBaseUrl) return;
-  void submitRelayPublicUrl(publicBaseUrl);
+  const restartMode = String(form.get("restartMode") || "managed");
+  void submitRelayPublicUrl(publicBaseUrl, { detached: restartMode === "detached" });
 });
 
 el.relayRegisterForm.addEventListener("submit", (event) => {

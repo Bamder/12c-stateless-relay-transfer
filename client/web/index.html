@@ -3,13 +3,57 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="12C 端到端加密文件传输 — 无状态中继，12位带外凭证" />
+    <meta name="theme-color" content="#ffffff" />
     <title>12C 文件传输</title>
+    <!-- 预连接默认 Registry，加速首次 API 调用 -->
+    <link rel="preconnect" href="http://127.0.0.1:8080" />
+    <link rel="dns-prefetch" href="http://127.0.0.1:8080" />
+    <!-- 预加载 WASM 加密模块 -->
+    <link rel="modulepreload" href="./wasm/twelve_c_cryptography.js" />
+    <!-- 内联启动屏关键 CSS，消除白屏闪烁 -->
+    <style>
+      :root{color-scheme:light;--bg:#ffffff;--surface:#f8fafc;--surface2:#f1f5f9;--border:#e2e8f0;--text:#1e293b;--text-strong:#0f172a;--muted:#64748b;--accent:#0369a1;--accent-dim:#0c4a6e;--radius:10px;font-family:"Segoe UI",system-ui,sans-serif}
+      *{box-sizing:border-box}
+      body{margin:0;background:var(--bg);color:var(--text);min-height:100vh}
+      .boot-screen{min-height:100vh;display:grid;place-items:center;padding:1.5rem}
+      .boot-card{width:min(420px,100%);background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1.5rem;box-shadow:0 8px 24px rgba(15,23,42,.08)}
+      .brand{font-weight:700;font-size:1.1rem;color:var(--text-strong);margin-bottom:.75rem}
+      .boot-status{margin:0 0 1rem;color:var(--muted)}
+      .boot-progress{height:8px;background:var(--surface2);border-radius:999px;overflow:hidden}
+      .boot-progress-bar{height:100%;width:0%;background:linear-gradient(90deg,#0c4a6e,#0369a1);transition:width .2s ease}
+    </style>
     <link rel="stylesheet" href="/src/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><defs><linearGradient id='g' x1='4' y1='2' x2='20' y2='21'><stop offset='0' stop-color='%237c7bff'/><stop offset='1' stop-color='%2322d3ee'/></linearGradient></defs><path d='M12 2 4 5.5v6c0 5 3.4 8.7 8 9.5 4.6-.8 8-4.5 8-9.5v-6L12 2z' fill='url(%23g)'/></svg>" />
   </head>
   <body>
     <div id="boot-screen" class="boot-screen">
       <div class="boot-card">
-        <div class="brand">12C Transfer</div>
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+              <path
+                d="M12 2 4 5.5v6c0 5 3.4 8.7 8 9.5 4.6-.8 8-4.5 8-9.5v-6L12 2z"
+                fill="url(#bootMarkGrad)"
+              />
+              <path
+                d="m9 12 2.1 2.1L15.5 9.5"
+                fill="none"
+                stroke="#0a0e17"
+                stroke-width="1.6"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+              <defs>
+                <linearGradient id="bootMarkGrad" x1="4" y1="2" x2="20" y2="21" gradientUnits="userSpaceOnUse">
+                  <stop offset="0" stop-color="#7c7bff" />
+                  <stop offset="1" stop-color="#22d3ee" />
+                </linearGradient>
+              </defs>
+            </svg>
+          </span>
+          <span class="brand-text">12C <em>Transfer</em></span>
+        </div>
         <p id="boot-status" class="boot-status">正在加载加密模块…</p>
         <div class="boot-progress" aria-hidden="true">
           <div id="boot-progress-bar" class="boot-progress-bar"></div>
@@ -19,16 +63,105 @@
 
     <div id="app" class="app hidden">
       <aside class="sidebar">
-        <div class="brand">12C Transfer</div>
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+              <path
+                d="M12 2 4 5.5v6c0 5 3.4 8.7 8 9.5 4.6-.8 8-4.5 8-9.5v-6L12 2z"
+                fill="url(#sideMarkGrad)"
+              />
+              <path
+                d="m9 12 2.1 2.1L15.5 9.5"
+                fill="none"
+                stroke="#0a0e17"
+                stroke-width="1.6"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+              <defs>
+                <linearGradient id="sideMarkGrad" x1="4" y1="2" x2="20" y2="21" gradientUnits="userSpaceOnUse">
+                  <stop offset="0" stop-color="#7c7bff" />
+                  <stop offset="1" stop-color="#22d3ee" />
+                </linearGradient>
+              </defs>
+            </svg>
+          </span>
+          <span class="brand-text">12C <em>Transfer</em></span>
+        </div>
         <nav class="nav">
-          <button type="button" class="nav-item active" data-panel="send">发送</button>
-          <button type="button" class="nav-item" data-panel="receive">接收</button>
-          <button type="button" class="nav-item" data-panel="settings">设置</button>
+          <button type="button" class="nav-item active" data-panel="send">
+            <span class="nav-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                <path
+                  d="M3.4 11.6 20.2 3.8a.9.9 0 0 1 1.2 1.2l-4.9 16.8a.9.9 0 0 1-1.66.14L11.8 15l-6.94-2.99a.9.9 0 0 1 .1-1.7 v0Z"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.6"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+                <path
+                  d="M11.8 15 20.4 5"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.6"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+              </svg>
+            </span>
+            <span class="nav-label">发送</span>
+          </button>
+          <button type="button" class="nav-item" data-panel="receive">
+            <span class="nav-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                <path
+                  d="M4 4h16v9.5a1 1 0 0 1-1 1h-4l-2.2 2.6a1 1 0 0 1-1.6 0L9 14.5H5a1 1 0 0 1-1-1V4z"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.6"
+                  stroke-linejoin="round"
+                />
+                <path
+                  d="M12 7v4.2m0 0-2-2m2 2 2-2"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.6"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+              </svg>
+            </span>
+            <span class="nav-label">接收</span>
+          </button>
+          <button type="button" class="nav-item" data-panel="settings">
+            <span class="nav-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                <path
+                  d="M12 15.2a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4Z"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.6"
+                />
+                <path
+                  d="M19.4 13.6c.05-.53.05-1.07 0-1.6l1.6-1.28-1.6-2.77-1.9.4a7.4 7.4 0 0 0-1.38-.8l-.3-1.95H9.18l-.3 1.95a7.4 7.4 0 0 0-1.38.8l-1.9-.4-1.6 2.77 1.6 1.28c-.05.53-.05 1.07 0 1.6l-1.6 1.28 1.6 2.77 1.9-.4c.42.33.89.6 1.38.8l.3 1.95h5.64l.3-1.95c.49-.2.96-.47 1.38-.8l1.9.4 1.6-2.77-1.6-1.28Z"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.4"
+                  stroke-linejoin="round"
+                />
+              </svg>
+            </span>
+            <span class="nav-label">设置</span>
+          </button>
         </nav>
         <div class="sidebar-foot">
           <div class="registry-pill">
-            <span class="registry-pill-label">Registry</span>
-            <span id="registry-url-label" class="registry-pill-value">—</span>
+            <span class="registry-pill-dot" aria-hidden="true"></span>
+            <span class="registry-pill-text">
+              <span class="registry-pill-label">Registry</span>
+              <span id="registry-url-label" class="registry-pill-value">—</span>
+            </span>
           </div>
         </div>
       </aside>
@@ -44,130 +177,8 @@
           <div id="send-error" class="banner error hidden"></div>
           <div id="send-info" class="banner info hidden"></div>
           <div class="card send-card">
-            <div class="send-row">
-              <label id="send-file-dropzone" class="file-dropzone" for="send-file-input">
-                <input id="send-file-input" type="file" class="file-input-hidden" />
-                <span id="send-file-empty" class="file-dropzone-empty">点击以选择文件</span>
-                <span id="send-file-selected" class="file-dropzone-selected hidden">
-                  <span id="send-file-icon" class="file-icon" aria-hidden="true"></span>
-                  <span id="send-file-name" class="file-name"></span>
-                  <span id="send-file-size" class="file-size"></span>
-                </span>
-                <span id="send-upload-stamp" class="upload-stamp hidden" aria-hidden="true">
-                  <span class="upload-stamp-inner">已上传</span>
-                </span>
-              </label>
-              <button id="send-btn" type="button" class="primary-btn send-btn" disabled>
-                上传并生成凭证
-              </button>
-            </div>
-
-            <div class="send-credential-section">
-              <div class="send-credential-header">
-                <span class="field-label send-credential-title">12C 文件提取凭证</span>
-                <button id="copy-credential-btn" type="button" class="ghost-btn" disabled>
-                  复制凭证
-                </button>
-              </div>
-              <div id="send-credential-slots" class="credential-slots"></div>
-            </div>
-
-            <div class="send-upload-progress">
-              <div class="progress-label">
-                <span>上传进度</span>
-                <span id="send-progress-text"></span>
-              </div>
-              <div class="progress-bar send-progress-bar">
-                <div id="send-progress-bar" class="progress-bar-fill"></div>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <section id="panel-receive" class="panel">
-          <header class="panel-header">
-            <div>
-              <h1>接收文件</h1>
-              <p class="subtitle">输入 12 位凭证，从 Relay 下载并解密</p>
-            </div>
-          </header>
-          <div id="receive-error" class="banner error hidden"></div>
-          <div class="card receive-card">
-            <div class="receive-credential-section">
-              <span class="field-label receive-credential-title">12C 文件提取凭证</span>
-              <div id="receive-credential-slots"></div>
-            </div>
-
-            <div class="receive-flow">
-              <button
-                id="receive-download-btn"
-                type="button"
-                class="receive-download-trigger"
-                disabled
-                aria-label="点击下载"
-              >
-                <span class="receive-download-arrow" aria-hidden="true">
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    viewBox="0 0 48 48"
-                    width="48"
-                    height="48"
-                    aria-hidden="true"
-                    focusable="false"
-                  >
-                    <path
-                      d="M24 44 4 18h12V4h16v14h12L24 44z"
-                      fill="currentColor"
-                    />
-                  </svg>
-                </span>
-                <span id="receive-download-hint" class="receive-download-hint">点击下载</span>
-              </button>
-
-              <div
-                id="receive-file-bar"
-                class="receive-file-bar receive-file-bar--pending"
-                role="presentation"
-              >
-                <span id="receive-file-pending" class="receive-file-pending">等待下载</span>
-                <span id="receive-file-ready" class="receive-file-ready hidden">
-                  <span id="receive-file-icon" class="file-icon" aria-hidden="true"></span>
-                  <span id="receive-file-name" class="file-name"></span>
-                  <span id="receive-file-size" class="file-size"></span>
-                </span>
-                <span id="receive-file-save-hint" class="receive-file-save-hint hidden"
-                  >点击保存到本地</span
-                >
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <section id="panel-settings" class="panel">
-          <header class="panel-header">
-            <div>
-              <h1>设置</h1>
-              <p class="subtitle">Registry 连接与本地偏好</p>
-            </div>
-          </header>
-          <div id="settings-error" class="banner error hidden"></div>
-          <div id="settings-info" class="banner info hidden"></div>
-          <div class="card settings-card">
-            <label class="field">
-              <span class="field-label">配置Registry服务器URL</span>
-              <input
-                id="registry-url-input"
-                type="url"
-                placeholder="http://127.0.0.1:8080"
-              />
-            </label>
-            <div class="button-row">
-              <button id="save-settings-btn" type="button" class="primary-btn">保存并重连</button>
-              <button id="reset-settings-btn" type="button" class="ghost-btn">恢复默认</button>
-            </div>
-
-            <div class="settings-section settings-section--ttl">
-              <span class="field-label">文件有效时间</span>
+            <div class="send-ttl-section">
+              <span class="field-label send-ttl-title">文件与二维码有效期</span>
               <div class="duration-input-row">
                 <label class="duration-field">
                   <input
@@ -207,8 +218,264 @@
                 </button>
               </div>
               <p class="hint hint-small">
-                当前上传文件的有效期为：<span id="file-ttl-current">1小时0分钟0秒</span>
+                当前有效期：<span id="file-ttl-current">1小时0分钟0秒</span>；从上传预留时开始计算，
+                可设置 1 秒至 24 小时。
               </p>
+            </div>
+
+            <div class="send-row">
+              <label id="send-file-dropzone" class="file-dropzone" for="send-file-input">
+                <input id="send-file-input" type="file" class="file-input-hidden" />
+                <span id="send-file-empty" class="file-dropzone-empty">
+                  <span class="file-dropzone-empty-icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                      <path
+                        d="M12 15.5V4m0 0-4 4m4-4 4 4"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="1.6"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                      />
+                      <path
+                        d="M4.5 15.5V18a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2v-2.5"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="1.6"
+                        stroke-linecap="round"
+                      />
+                    </svg>
+                  </span>
+                  <span>点击以选择文件，或拖拽到此处</span>
+                </span>
+                <span id="send-file-selected" class="file-dropzone-selected hidden">
+                  <span id="send-file-icon" class="file-icon" aria-hidden="true"></span>
+                  <span id="send-file-name" class="file-name"></span>
+                  <span id="send-file-size" class="file-size"></span>
+                </span>
+                <span id="send-upload-stamp" class="upload-stamp hidden" aria-hidden="true">
+                  <span class="upload-stamp-inner">已上传</span>
+                </span>
+              </label>
+              <button id="send-btn" type="button" class="primary-btn send-btn" disabled>
+                上传并生成凭证
+              </button>
+            </div>
+
+            <div class="send-credential-section">
+              <div class="send-credential-header">
+                <span class="field-label send-credential-title">12C 文件提取凭证</span>
+                <button id="copy-credential-btn" type="button" class="ghost-btn" disabled>
+                  复制凭证
+                </button>
+              </div>
+              <div id="send-credential-slots" class="credential-slots"></div>
+            </div>
+
+            <section
+              id="send-share-section"
+              class="send-share-section hidden"
+              aria-labelledby="send-share-title"
+            >
+              <div class="send-share-header">
+                <div>
+                  <h2 id="send-share-title" class="send-share-title">扫码接收文件</h2>
+                  <p id="send-share-ttl" class="send-share-ttl" aria-live="polite"></p>
+                </div>
+                <p id="send-share-warning" class="send-share-warning hidden" role="alert"></p>
+              </div>
+              <div class="send-share-layout">
+                <div class="send-share-qr-frame">
+                  <div
+                    id="send-share-qr"
+                    class="send-share-qr"
+                    role="img"
+                    aria-label="文件接收二维码"
+                  ></div>
+                </div>
+                <div class="send-share-details">
+                  <label class="field-label" for="send-share-link-output">接收链接</label>
+                  <input
+                    id="send-share-link-output"
+                    class="send-share-link-output"
+                    type="url"
+                    readonly
+                    aria-label="只读接收链接"
+                  />
+                  <div class="send-share-actions">
+                    <button id="copy-receive-link-btn" type="button" class="ghost-btn">
+                      复制接收链接
+                    </button>
+                    <button id="download-receive-qr-btn" type="button" class="ghost-btn">
+                      保存二维码
+                    </button>
+                  </div>
+                  <p class="send-share-security-note">
+                    二维码等同于完整的文件提取凭证。请仅分享给可信接收方，并在有效期结束前妥善保管。
+                  </p>
+                </div>
+              </div>
+            </section>
+
+            <div class="send-upload-progress">
+              <div class="progress-label">
+                <span class="send-progress-label-group">
+                  <span class="send-progress-label-title">上传进度</span>
+                  <span id="send-upload-status" class="send-upload-status hidden" aria-live="polite">
+                    <span class="send-upload-spinner" aria-hidden="true"></span>
+                    <span id="send-upload-status-text" class="send-upload-status-text"></span>
+                  </span>
+                </span>
+                <span id="send-progress-text"></span>
+              </div>
+              <div id="send-progress-track" class="progress-bar send-progress-bar">
+                <div id="send-progress-bar" class="progress-bar-fill"></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section id="panel-receive" class="panel">
+          <header class="panel-header">
+            <div>
+              <h1>接收文件</h1>
+              <p class="subtitle">输入 12 位凭证，从 Relay 下载并解密</p>
+            </div>
+          </header>
+          <div id="receive-error" class="banner error hidden"></div>
+          <div class="card receive-card">
+            <div class="receive-credential-section">
+              <div class="receive-credential-header">
+                <span class="field-label receive-credential-title">12C 文件提取凭证</span>
+                <button id="paste-receive-credential-btn" type="button" class="ghost-btn">
+                  粘贴凭证
+                </button>
+              </div>
+              <div id="receive-credential-slots"></div>
+            </div>
+
+            <div class="receive-flow">
+              <div class="receive-download-row">
+                <div
+                  id="receive-download-progress-header"
+                  class="receive-download-status-slot hidden"
+                  aria-live="polite"
+                >
+                  <span id="receive-download-status" class="receive-download-status">
+                    <span
+                      id="receive-download-spinner"
+                      class="receive-download-spinner hidden"
+                      aria-hidden="true"
+                    ></span>
+                    <span
+                      id="receive-download-status-text"
+                      class="receive-download-status-text"
+                    ></span>
+                  </span>
+                </div>
+                <button
+                  id="receive-download-btn"
+                  type="button"
+                  class="receive-download-trigger receive-download-trigger--idle"
+                  disabled
+                  aria-label="点击下载"
+                >
+                  <div class="receive-download-visual">
+                    <div class="receive-download-ring-host">
+                      <svg
+                        class="receive-download-ring"
+                        viewBox="0 0 100 100"
+                        aria-hidden="true"
+                        focusable="false"
+                      >
+                        <circle
+                          class="receive-download-ring-track"
+                          cx="50"
+                          cy="50"
+                          r="46"
+                          pathLength="100"
+                        />
+                        <circle
+                          id="receive-download-ring-fill"
+                          class="receive-download-ring-fill"
+                          cx="50"
+                          cy="50"
+                          r="46"
+                          pathLength="100"
+                        />
+                      </svg>
+                      <div class="receive-download-ring-inner">
+                        <span class="receive-download-arrow" aria-hidden="true">
+                          <svg
+                            xmlns="http://www.w3.org/2000/svg"
+                            viewBox="0 0 48 48"
+                            width="48"
+                            height="48"
+                            aria-hidden="true"
+                            focusable="false"
+                          >
+                            <path
+                              d="M24 44 4 18h12V4h16v14h12L24 44z"
+                              fill="currentColor"
+                            />
+                          </svg>
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                  <span id="receive-download-hint" class="receive-download-hint">点击下载</span>
+                </button>
+                <span
+                  id="receive-download-progress-text"
+                  class="receive-download-progress-text hidden"
+                  aria-live="polite"
+                ></span>
+              </div>
+
+              <div class="receive-file-area">
+                <button
+                  id="receive-file-bar"
+                  class="receive-file-bar receive-file-bar--pending"
+                  type="button"
+                  disabled
+                  aria-live="polite"
+                >
+                  <span id="receive-file-pending" class="receive-file-pending">等待下载</span>
+                  <span id="receive-file-ready" class="receive-file-ready hidden">
+                    <span id="receive-file-icon" class="file-icon" aria-hidden="true"></span>
+                    <span id="receive-file-name" class="file-name"></span>
+                    <span id="receive-file-size" class="file-size"></span>
+                  </span>
+                  <span id="receive-file-save-hint" class="receive-file-save-hint hidden"
+                    >点击保存到本地</span
+                  >
+                </button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section id="panel-settings" class="panel">
+          <header class="panel-header">
+            <div>
+              <h1>设置</h1>
+              <p class="subtitle">Registry 连接与本地偏好</p>
+            </div>
+          </header>
+          <div id="settings-error" class="banner error hidden"></div>
+          <div id="settings-info" class="banner info hidden"></div>
+          <div class="card settings-card">
+            <label class="field">
+              <span class="field-label">配置Registry服务器URL</span>
+              <input
+                id="registry-url-input"
+                type="url"
+                placeholder="http://127.0.0.1:8080"
+              />
+            </label>
+            <div class="button-row">
+              <button id="save-settings-btn" type="button" class="primary-btn">保存并重连</button>
+              <button id="reset-settings-btn" type="button" class="ghost-btn">恢复默认</button>
             </div>
 
             <div class="settings-section settings-section--credential-style">

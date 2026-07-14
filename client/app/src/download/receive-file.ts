@@ -2,6 +2,7 @@ import {
   CREDENTIAL_LENGTH,
   downloadAdaptive,
   type DownloadAdaptiveResult,
+  type DownloadStatusUpdate,
   type ReceiveTransport,
   type TwelveCClient,
 } from '@stateless-relay/transfer';
@@ -12,8 +13,11 @@ export interface ReceiveFileDeps {
 }
 
 export interface ReceiveFileOptions {
-  /** 初始并发预取 token 数，默认与 `downloadAdaptive` 相同 */
+  /** Π_Recv_Adaptive 初始并发 m；省略时浏览器按内存预算推导 */
   initialTokens?: number;
+  /** 解析 SMB 前估计 wire 块上限（registry relay.config） */
+  relayMaxBodyBytes?: number;
+  onStatus?: (status: DownloadStatusUpdate) => void;
 }
 
 export type ReceivedFile = DownloadAdaptiveResult;
@@ -34,6 +38,10 @@ export async function receiveFile(
     credential,
     deps.receiveTransport,
     deps.twelveC,
-    { initialTokens: options.initialTokens },
+    {
+      initialTokens: options.initialTokens,
+      relayMaxBodyBytes: options.relayMaxBodyBytes,
+      onStatus: options.onStatus,
+    },
   );
 }

@@ -1,6 +1,6 @@
 import { runCryptoRoundtrip, type RoundtripCaseResult } from './runtime.js';
 
-const ROUNDTRIP_SIZES = [1, 5 * 1024, 1024 * 1024] as const;
+const ROUNDTRIP_SIZES = [1, 5 * 1024, 1024 * 1024, 17 * 1024 * 1024] as const;
 
 declare global {
   interface Window {
@@ -28,7 +28,7 @@ export async function runRoundtripSelftest(): Promise<void> {
   }
 
   try {
-    status.textContent = '正在跑 roundtrip (1B / 5KB / 1MB)…';
+    status.textContent = '正在跑 roundtrip (1B / 5KB / 1MB / 17MB)…';
     if (progressBar) {
       progressBar.style.width = '60%';
     }

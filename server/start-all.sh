@@ -3,7 +3,7 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 
-echo "Launching Registry..."
+echo "Launching Registry (includes Client Web when dist/ is built)..."
 ( cd "$ROOT/registry" && ./start.sh ) &
 REGISTRY_PID=$!
 sleep 2

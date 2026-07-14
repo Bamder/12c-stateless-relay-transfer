@@ -3,6 +3,7 @@
 #include "twelve_c/constants.hpp"
 #include "twelve_c/crypto.hpp"
 #include "twelve_c/merkle.hpp"
+#include "twelve_c/segment.hpp"
 #include "twelve_c/smb_parser.hpp"
 
 #include <stdexcept>
@@ -91,6 +92,24 @@ std::vector<Bytes> collect_blocks_from_uploads(
     return blocks;
 }
 
+Bytes decrypt_payload_for_segment_code(
+    const Bytes& k_fek,
+    const Bytes& ciphertext,
+    const SmbMetadata& metadata,
+    const std::size_t padded_plaintext_length) {
+    if (is_v2_whole_file_mode(metadata.segment_code)) {
+        return decrypt_payload_v2_whole_file(
+            k_fek,
+            ciphertext,
+            padded_plaintext_length);
+    }
+    return decrypt_payload_v21_segmented(
+        k_fek,
+        ciphertext,
+        metadata.segment_code,
+        padded_plaintext_length);
+}
+
 Bytes decrypt_file(
     const CredentialParts& parts,
     const SmbMetadata& metadata,
@@ -106,10 +125,17 @@ Bytes decrypt_file(
             reinterpret_cast<const char*>(metadata.salt_rand.data()),
             metadata.salt_rand.size()));
     const Bytes k_fek = decrypt(k_kek, metadata.encrypted_fek.pack());
-    Bytes plaintext = decrypt(k_fek, ciphertext);
 
     const std::size_t padded_plaintext_length =
-        static_cast<std::size_t>(metadata.ciphertext_length) - kGcmEnvelopeBytes;
+        padded_plaintext_length_from_ciphertext(
+            static_cast<std::size_t>(metadata.ciphertext_length),
+            metadata.segment_code);
+
+    Bytes plaintext = decrypt_payload_for_segment_code(
+        k_fek,
+        ciphertext,
+        metadata,
+        padded_plaintext_length);
     const std::size_t original_length =
         static_cast<std::size_t>(metadata.original_file_length);
     if (padded_plaintext_length < original_length) {

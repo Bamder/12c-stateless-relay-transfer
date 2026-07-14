@@ -1,9 +1,17 @@
 import type { RelayEndpoint } from '../types.js';
+import type { ByteTransferProgressListener } from '../transport/byte-transfer-progress.js';
+import { createThrottledProgressListener } from '../transport/byte-transfer-progress.js';
+import { readResponseBody } from '../transport/get-response-body.js';
 
 export interface GetWithFallbacksOptions {
   fetchFn: typeof fetch;
   rejectNonOk: boolean;
   signal?: AbortSignal;
+  onDownloadProgress?: ByteTransferProgressListener;
+  /** Fallback expected size when Content-Length is absent. */
+  expectedBytesTotal?: number;
+  /** Force legacy response.arrayBuffer() instead of streaming read. */
+  forceArrayBufferFallback?: boolean;
 }
 
 export async function getWithFallbacks(
@@ -13,6 +21,9 @@ export async function getWithFallbacks(
 ): Promise<Uint8Array> {
   const candidates = [endpoint, ...(endpoint.fallbacks ?? [])];
   let lastError: unknown;
+  const onDownloadProgress = createThrottledProgressListener(
+    options.onDownloadProgress,
+  );
 
   for (const candidate of candidates) {
     try {
@@ -26,8 +37,11 @@ export async function getWithFallbacks(
         throw new Error(`GET ${token} failed: HTTP ${response.status}`);
       }
 
-      const buffer = await response.arrayBuffer();
-      return new Uint8Array(buffer);
+      return await readResponseBody(response, {
+        onDownloadProgress,
+        expectedBytesTotal: options.expectedBytesTotal,
+        forceArrayBufferFallback: options.forceArrayBufferFallback,
+      });
     } catch (error) {
       if (options.signal?.aborted) {
         throw error;

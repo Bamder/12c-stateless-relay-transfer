@@ -10,11 +10,13 @@
     "prebuild": "npm run copy:wasm",
     "build": "vite build",
     "preview": "vite preview",
+    "test:qr": "node --experimental-strip-types --test tests/qr-share-link.test.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@stateless-relay/app": "*",
-    "@stateless-relay/transfer": "*"
+    "@stateless-relay/transfer": "*",
+    "qrcode-generator": "2.0.4"
   },
   "devDependencies": {
     "typescript": "^5.8.3",

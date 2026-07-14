@@ -8,6 +8,18 @@ export interface RelayTargetRecord {
 export interface RelayRegistryRecord {
   targets: RelayTargetRecord[];
   headers?: Record<string, string>;
+  /** Registry resolve 状态；空 targets 时区分过期与从未登记。 */
+  resolveStatus?: RelayResolveStatus;
+}
+
+/** Registry `/api/relay/resolve` 对单 token 的可用性分类。 */
+export type RelayResolveStatus = 'ready' | 'expired' | 'unavailable';
+
+export class TokenPlacementExpiredError extends Error {
+  constructor(readonly token: string) {
+    super(`token placement expired: ${token}`);
+    this.name = 'TokenPlacementExpiredError';
+  }
 }
 
 export type RelayRegistryMap = Map<string, RelayRegistryRecord>;
@@ -129,6 +141,13 @@ function normalizeTarget(value: unknown, token: string): RelayTargetRecord {
   };
 }
 
+function parseResolveStatus(value: unknown): RelayResolveStatus | undefined {
+  if (value === 'ready' || value === 'expired' || value === 'unavailable') {
+    return value;
+  }
+  return undefined;
+}
+
 function normalizeRecord(value: unknown, token: string): RelayRegistryRecord {
   if (typeof value !== 'object' || value === null) {
     throw new Error(`registry entry for ${token} is not an object`);
@@ -146,6 +165,7 @@ function normalizeRecord(value: unknown, token: string): RelayRegistryRecord {
         typeof record.headers === 'object' && record.headers !== null
           ? (record.headers as Record<string, string>)
           : undefined,
+      resolveStatus: parseResolveStatus(record.resolveStatus) ?? 'unavailable',
     };
   }
 
@@ -160,6 +180,7 @@ function normalizeRecord(value: unknown, token: string): RelayRegistryRecord {
       typeof record.headers === 'object' && record.headers !== null
         ? (record.headers as Record<string, string>)
         : undefined,
+    resolveStatus: parseResolveStatus(record.resolveStatus) ?? 'ready',
   };
 }
 
@@ -193,7 +214,7 @@ function defaultParseResponse(
 
   for (const token of tokens) {
     if (!map.has(token)) {
-      map.set(token, { targets: [] });
+      map.set(token, { targets: [], resolveStatus: 'unavailable' });
     }
   }
 

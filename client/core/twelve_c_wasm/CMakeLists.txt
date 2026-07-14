@@ -16,11 +16,14 @@ add_executable(twelve_c_cryptography
     bindings.cpp
     ${TWELVE_C_CRYPTO_ROOT}/src/crypto.cpp
     ${TWELVE_C_CRYPTO_ROOT}/src/merkle.cpp
+    ${TWELVE_C_CRYPTO_ROOT}/src/segment.cpp
     ${TWELVE_C_CRYPTO_ROOT}/src/smb.cpp
     ${TWELVE_C_CRYPTO_ROOT}/src/smb_parser.cpp
     ${TWELVE_C_CRYPTO_ROOT}/src/sender.cpp
     ${TWELVE_C_CRYPTO_ROOT}/src/receiver.cpp
+    ${TWELVE_C_CRYPTO_ROOT}/src/receive_decrypt_session.cpp
     ${TWELVE_C_CRYPTO_ROOT}/src/wire_layout.cpp
+    ${TWELVE_C_CRYPTO_ROOT}/src/upload_prepare_session.cpp
 )
 
 target_include_directories(twelve_c_cryptography

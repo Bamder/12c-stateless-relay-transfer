@@ -81,4 +81,57 @@ bool verify_merkle_root(
     return tree.root_hash == expected_root;
 }
 
+MerkleTree build_merkle_tree_from_leaf_hashes(
+    const std::vector<Bytes>& leaf_hashes) {
+    MerkleTree tree;
+    if (leaf_hashes.empty()) {
+        tree.root_hash = sha256({});
+        tree.levels.push_back({tree.root_hash});
+        return tree;
+    }
+
+    std::vector<Bytes> current_level = leaf_hashes;
+    tree.levels.push_back(current_level);
+
+    while (current_level.size() > 1) {
+        std::vector<Bytes> next_level;
+        next_level.reserve((current_level.size() + 1) / 2);
+
+        for (std::size_t index = 0; index < current_level.size(); index += 2) {
+            Bytes combined;
+            combined.insert(
+                combined.end(),
+                current_level[index].begin(),
+                current_level[index].end());
+
+            if (index + 1 < current_level.size()) {
+                combined.insert(
+                    combined.end(),
+                    current_level[index + 1].begin(),
+                    current_level[index + 1].end());
+            } else {
+                combined.insert(
+                    combined.end(),
+                    current_level[index].begin(),
+                    current_level[index].end());
+            }
+
+            next_level.push_back(sha256(combined));
+        }
+
+        tree.levels.push_back(next_level);
+        current_level = std::move(next_level);
+    }
+
+    tree.root_hash = current_level.front();
+    return tree;
+}
+
+bool verify_merkle_root_from_leaf_hashes(
+    const std::vector<Bytes>& leaf_hashes,
+    const Bytes& expected_root) {
+    const MerkleTree tree = build_merkle_tree_from_leaf_hashes(leaf_hashes);
+    return tree.root_hash == expected_root;
+}
+
 }  // namespace twelve_c

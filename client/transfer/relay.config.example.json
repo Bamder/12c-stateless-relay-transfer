@@ -4,5 +4,8 @@
     "port": 8080,
     "scheme": "http",
     "coalesce": true
+  },
+  "relay": {
+    "maxBodyBytes": 33554432
   }
 }

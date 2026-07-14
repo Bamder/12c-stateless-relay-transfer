@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from ..config import RegistryServerConfig, load_config
 from ..persistence.repository import RegistryRepository
 from ..services.registry import RegistryService
+from .client_static import client_dist_ready, mount_client_static
 from .routes import create_admin_router, create_relay_router
 
 
@@ -43,10 +44,15 @@ def create_app(config: RegistryServerConfig | None = None) -> FastAPI:
                 db_ready = False
         if not db_ready:
             raise HTTPException(status_code=503, detail="database not ready")
-        return {"status": "ok", "dbReady": True}
+        return {
+            "status": "ok",
+            "dbReady": True,
+            "clientDistReady": client_dist_ready(settings.client_static_dir),
+        }
 
     app.include_router(create_relay_router(service))
     app.include_router(create_admin_router(service))
+    mount_client_static(app, settings.client_static_dir, settings.max_body_bytes)
 
     app.state.config = settings
     app.state.repository = repository

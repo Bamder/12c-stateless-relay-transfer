@@ -2,7 +2,7 @@
 $ErrorActionPreference = "Stop"
 $Root = $PSScriptRoot
 
-Write-Host "Launching Registry..."
+Write-Host "Launching Registry (includes Client Web when dist/ is built)..."
 Start-Process powershell -ArgumentList @(
     "-NoExit", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $Root "registry\start.ps1")
 )

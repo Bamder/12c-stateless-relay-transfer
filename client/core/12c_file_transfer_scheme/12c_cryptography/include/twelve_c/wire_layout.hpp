@@ -1,5 +1,8 @@
 #pragma once
 
+#include "twelve_c/constants.hpp"
+#include "twelve_c/segment.hpp"
+
 #include <cstddef>
 #include <cstdint>
 
@@ -11,8 +14,8 @@ namespace twelve_c {
  * - SMB 定长 kSmEncBytes，无长度前缀
  * - total = kSmEncBytes + |C|
  * - m >= ceil(|C| / kWireBlockRef)，微调 m 使 m * B == total 精确成立
- * - B = total / m，且 B >= min(kMaxWireBlockBytes, total / 8)
- * - B <= kMaxWireBlockBytes（Relay PUT 上限）
+ * - B = total / m，且 B >= min(max_wire_block_bytes, total / 8)
+ * - B <= max_wire_block_bytes（Relay PUT 有效上限）
  * - Token[0] = S_enc || B_m（末段密文），|Token[i]| = B 对所有 i
  * - Token[1..m-1] = C 的前 m-1 段，各 B 字节
  * - Merkle 叶子 = 逻辑密文块 B_1..B_m
@@ -32,6 +35,11 @@ struct WireLayout {
     std::size_t plaintext_padding = 0;
 };
 
-WireLayout compute_wire_layout(std::size_t plaintext_length);
+void validate_max_wire_block_bytes(std::size_t max_wire_block_bytes);
+
+WireLayout compute_wire_layout(
+    std::size_t plaintext_length,
+    std::uint16_t segment_code = kV2SegmentCodeWholeFile,
+    std::size_t max_wire_block_bytes = kDefaultWireBlockBytesCap);
 
 }  // namespace twelve_c

@@ -1,3 +1,9 @@
+"""Striping and replica placement planning.
+
+Healthy relays are expected already ordered (prefer lower storage_rate).
+Config knobs come from PlacementPolicy; this module only runs the math.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -5,6 +11,8 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class HealthyRelay:
+    """A candidate relay for upload placement."""
+
     relay_id: str
     relay_base_url: str
     storage_rate: float
@@ -14,6 +22,8 @@ class HealthyRelay:
 
 @dataclass(frozen=True)
 class StripeReplicaChoice:
+    """Chosen stripe width S and file-level replica factor R."""
+
     stripe_count: int
     replica_factor: int
 
@@ -25,7 +35,12 @@ def choose_stripe_replica(
     stripe_target_relays: int,
     max_file_replica_count: int,
 ) -> StripeReplicaChoice:
-    """Pick (S, R) maximizing S×(1+R); tie-break larger S."""
+    """Stripe–replica sizing: pick (S, R) that maximizes layout capacity.
+
+    Score is S×(1+R). Among equal scores, prefer a larger S.
+    S cannot exceed the stripe target, block count, or healthy relay count;
+    R(S) is min(max_file_replica_count, (healthy_count − S) // S).
+    """
     s_max = min(stripe_target_relays, block_count, healthy_count)
     if s_max < 1:
         return StripeReplicaChoice(stripe_count=1, replica_factor=0)
@@ -52,6 +67,10 @@ def replica_count_per_block(
     replica_factor: int,
     max_replicas_per_block: int,
 ) -> int:
+    """How many replica copies each block gets besides its primary.
+
+    Bounded by the file-level replica factor R and max_replicas_per_block − 1.
+    """
     if replica_factor <= 0:
         return 0
     return min(replica_factor, max_replicas_per_block - 1)
@@ -59,6 +78,8 @@ def replica_count_per_block(
 
 @dataclass(frozen=True)
 class PlannedPlacement:
+    """One token on one relay with role primary or replica."""
+
     token: str
     block_hash: str
     relay_id: str
@@ -74,6 +95,13 @@ def plan_token_placements(
     max_file_replica_count: int,
     max_replicas_per_block: int,
 ) -> tuple[StripeReplicaChoice, list[PlannedPlacement]]:
+    """Token–relay assignment: map each block token onto stripe primaries and replicas.
+
+    First chooses (S, R) via stripe–replica sizing. The first S healthy relays
+    form the primary pool (token i → primary[i % S]); the next S×R relays form
+    the replica pool, rotated per token. Returns the (S, R) choice plus every
+    planned primary/replica row.
+    """
     if not entries:
         return StripeReplicaChoice(1, 0), []
     if not healthy:

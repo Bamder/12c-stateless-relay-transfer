@@ -7,7 +7,7 @@ import {
   type RelayRouter,
   type TwelveCClient,
   type UploadMap,
-  type UploadProgress,
+  type UploadStatusUpdate,
 } from '@stateless-relay/transfer';
 import { generateCredential } from '../credential/generate-credential.js';
 import { UploadTokenReservationExhaustedError } from './upload-token-reservation-exhausted-error.js';
@@ -26,7 +26,7 @@ export interface SendFileOptions {
   concurrency?: number;
   /** token 占用时最多重试次数（含首次），默认 5 */
   maxReservationAttempts?: number;
-  onProgress?: (progress: UploadProgress) => void;
+  onProgress?: (status: UploadStatusUpdate) => void;
   /** 每次因 409 重新生成凭证时回调 */
   onReservationRetry?: (info: {
     attempt: number;

@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+import hashlib
+import json
 from pathlib import Path
+import uuid
 
 import aiosqlite
 
@@ -15,6 +18,10 @@ from ..scheduling.placement_ttl import (
     DEFAULT_BLOCK_SWEEP_INTERVAL_SECONDS,
     InsufficientRelayCapacityError,
     resolve_placement_with_ttl,
+)
+from ..scheduling.read_steering import (
+    DownloadTargetCandidate,
+    order_download_targets_by_load,
 )
 
 
@@ -120,6 +127,12 @@ ADMIN_DB_TABLES: tuple[str, ...] = (
     "token_relay_placements",
     "relay_registry_keys",
     "relay_block_auth_keys",
+    "relay_heartbeat_events",
+    "token_reservation_batches",
+    "token_reservation_items",
+    "token_resolution_events",
+    "replica_abandon_events",
+    "registry_admin_events",
 )
 
 ADMIN_DB_PRIMARY_KEYS: dict[str, tuple[str, ...]] = {
@@ -129,6 +142,12 @@ ADMIN_DB_PRIMARY_KEYS: dict[str, tuple[str, ...]] = {
     "token_relay_placements": ("token", "relay_id"),
     "relay_registry_keys": ("relay_id", "key_id"),
     "relay_block_auth_keys": ("relay_id", "key_id"),
+    "relay_heartbeat_events": ("event_id",),
+    "token_reservation_batches": ("batch_id",),
+    "token_reservation_items": ("batch_id", "token_hash"),
+    "token_resolution_events": ("event_id",),
+    "replica_abandon_events": ("event_id",),
+    "registry_admin_events": ("event_id",),
 }
 
 ADMIN_DB_ROW_LIMIT = 500
@@ -170,6 +189,14 @@ class TokenOccupiedError(Exception):
         super().__init__("one or more tokens are occupied")
 
 _PATCH_UNSET = object()
+
+
+def _hash_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def _token_prefix(token: str) -> str:
+    return token[:8]
 
 
 class RegistryRepository:
@@ -256,6 +283,89 @@ class RegistryRepository:
                     created_at TEXT NOT NULL,
                     PRIMARY KEY (relay_id, key_id)
                 )
+                """,
+            )
+            # 运维审计表只保存状态、统计和哈希摘要，不保存文件内容。
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS relay_heartbeat_events (
+                    event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    relay_id TEXT NOT NULL,
+                    relay_base_url TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    stored_blocks INTEGER NOT NULL,
+                    max_blocks INTEGER NOT NULL,
+                    storage_rate REAL NOT NULL,
+                    reported_at TEXT NOT NULL
+                )
+                """,
+            )
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS token_reservation_batches (
+                    batch_id TEXT PRIMARY KEY,
+                    token_count INTEGER NOT NULL,
+                    ttl_seconds INTEGER NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+                """,
+            )
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS token_reservation_items (
+                    batch_id TEXT NOT NULL,
+                    token_hash TEXT NOT NULL,
+                    token_prefix TEXT NOT NULL,
+                    block_hash_prefix TEXT NOT NULL,
+                    target_count INTEGER NOT NULL,
+                    created_at TEXT NOT NULL,
+                    PRIMARY KEY (batch_id, token_hash)
+                )
+                """,
+            )
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS token_resolution_events (
+                    event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    token_count INTEGER NOT NULL,
+                    resolved_count INTEGER NOT NULL,
+                    requested_at TEXT NOT NULL
+                )
+                """,
+            )
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS replica_abandon_events (
+                    event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    token_hash TEXT NOT NULL,
+                    token_prefix TEXT NOT NULL,
+                    relay_id TEXT NOT NULL,
+                    removed INTEGER NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+                """,
+            )
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS registry_admin_events (
+                    event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    action TEXT NOT NULL,
+                    target_table TEXT,
+                    target_key TEXT,
+                    created_at TEXT NOT NULL
+                )
+                """,
+            )
+            await db.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_relay_heartbeat_events_relay_time
+                ON relay_heartbeat_events(relay_id, reported_at)
+                """,
+            )
+            await db.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_block_resolution_events_time
+                ON token_resolution_events(requested_at)
                 """,
             )
             await db.commit()
@@ -736,6 +846,114 @@ class RegistryRepository:
             )
         return overviews
 
+    async def record_heartbeat_event(
+        self,
+        *,
+        relay_id: str,
+        relay_base_url: str,
+        status: str,
+        stored_blocks: int,
+        max_blocks: int,
+        storage_rate: float,
+    ) -> None:
+        async with aiosqlite.connect(self._database_path) as db:
+            await db.execute(
+                """
+                INSERT INTO relay_heartbeat_events (
+                    relay_id, relay_base_url, status, stored_blocks,
+                    max_blocks, storage_rate, reported_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    relay_id,
+                    relay_base_url.rstrip("/"),
+                    status,
+                    stored_blocks,
+                    max_blocks,
+                    storage_rate,
+                    utc_now_iso(),
+                ),
+            )
+            await db.commit()
+
+    async def record_token_reservation_batch(
+        self,
+        *,
+        entries: list[tuple[str, str]],
+        results: list[TokenReserveResult],
+        ttl_seconds: int,
+    ) -> None:
+        batch_id = uuid.uuid4().hex
+        now = utc_now_iso()
+        target_counts = {item.token: len(item.targets) for item in results}
+        async with aiosqlite.connect(self._database_path) as db:
+            await db.execute(
+                """
+                INSERT INTO token_reservation_batches (
+                    batch_id, token_count, ttl_seconds, created_at
+                ) VALUES (?, ?, ?, ?)
+                """,
+                (batch_id, len(entries), ttl_seconds, now),
+            )
+            for token, block_hash in entries:
+                await db.execute(
+                    """
+                    INSERT INTO token_reservation_items (
+                        batch_id, token_hash, token_prefix, block_hash_prefix,
+                        target_count, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        batch_id,
+                        _hash_token(token),
+                        _token_prefix(token),
+                        block_hash[:12],
+                        target_counts.get(token, 0),
+                        now,
+                    ),
+                )
+            await db.commit()
+
+    async def record_token_resolution_event(
+        self,
+        *,
+        token_count: int,
+        resolved_count: int,
+    ) -> None:
+        async with aiosqlite.connect(self._database_path) as db:
+            await db.execute(
+                """
+                INSERT INTO token_resolution_events (
+                    token_count, resolved_count, requested_at
+                ) VALUES (?, ?, ?)
+                """,
+                (token_count, resolved_count, utc_now_iso()),
+            )
+            await db.commit()
+
+    async def record_admin_event(
+        self,
+        *,
+        action: str,
+        target_table: str | None = None,
+        keys: dict[str, object] | None = None,
+    ) -> None:
+        target_key = (
+            json.dumps(keys, ensure_ascii=False, sort_keys=True, default=str)
+            if keys is not None
+            else None
+        )
+        async with aiosqlite.connect(self._database_path) as db:
+            await db.execute(
+                """
+                INSERT INTO registry_admin_events (
+                    action, target_table, target_key, created_at
+                ) VALUES (?, ?, ?, ?)
+                """,
+                (action, target_table, target_key, utc_now_iso()),
+            )
+            await db.commit()
+
     def _mask_admin_row(self, table: str, row: dict[str, object]) -> dict[str, object]:
         masked = dict(row)
         if table == "relay_registry_keys" and masked.get("key_secret_hash"):
@@ -917,6 +1135,14 @@ class RegistryRepository:
     def is_placement_live(self, placement: TokenPlacement) -> bool:
         return not self._is_expired(placement.expiry_at)
 
+    async def classify_token_resolve_status(self, token: str) -> str:
+        placements = await self.get_token_placements(token)
+        if not placements:
+            return "unavailable"
+        if not any(self.is_placement_live(item) for item in placements):
+            return "expired"
+        return "ready"
+
     async def update_token_block_hash(self, token: str, block_hash: str) -> None:
         now = utc_now_iso()
         async with aiosqlite.connect(self._database_path) as db:
@@ -1045,6 +1271,11 @@ class RegistryRepository:
                 raise RuntimeError(f"failed to lock token placements: {token}")
             locked.append(self._placements_to_reserve_result(token, placements))
 
+        await self.record_token_reservation_batch(
+            entries=unique,
+            results=locked,
+            ttl_seconds=resolution.granted_ttl_seconds,
+        )
         return LockTokensOutcome(
             routes=tuple(locked),
             granted_ttl_seconds=resolution.granted_ttl_seconds,
@@ -1070,29 +1301,33 @@ class RegistryRepository:
         healthy_ids = set(healthy_rates)
 
         live_targets: list[RelayTarget] = []
+        candidates: list[DownloadTargetCandidate] = []
         for item in placements:
             if item.relay_id not in healthy_ids:
                 continue
             if not self.is_placement_live(item):
                 continue
-            live_targets.append(
-                RelayTarget(
+            candidates.append(
+                DownloadTargetCandidate(
                     role=item.role,
                     relay_id=item.relay_id,
                     relay_base_url=item.relay_base_url,
+                    storage_rate=healthy_rates.get(item.relay_id, 1.0),
                 ),
             )
 
-        if not any(target.role == "primary" for target in live_targets):
+        if not any(candidate.role == "primary" for candidate in candidates):
             return None
 
-        live_targets.sort(
-            key=lambda target: (
-                0 if target.role == "primary" else 1,
-                healthy_rates.get(target.relay_id, 1.0),
-                target.relay_id,
-            ),
-        )
+        steered = order_download_targets_by_load(candidates)
+        live_targets = [
+            RelayTarget(
+                role=item.role,
+                relay_id=item.relay_id,
+                relay_base_url=item.relay_base_url,
+            )
+            for item in steered
+        ]
         return TokenReserveResult(
             token=token,
             targets=tuple(live_targets),
@@ -1126,6 +1361,23 @@ class RegistryRepository:
                 )
                 if cursor.rowcount > 0:
                     removed.append((token, relay_id))
+            removed_set = set(removed)
+            now = utc_now_iso()
+            for token, relay_id in unique:
+                await db.execute(
+                    """
+                    INSERT INTO replica_abandon_events (
+                        token_hash, token_prefix, relay_id, removed, created_at
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        _hash_token(token),
+                        _token_prefix(token),
+                        relay_id,
+                        1 if (token, relay_id) in removed_set else 0,
+                        now,
+                    ),
+                )
             await db.commit()
 
         return removed
