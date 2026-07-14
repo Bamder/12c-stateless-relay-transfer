@@ -165,6 +165,8 @@ Registry 同时分发 `client/web/dist/` 静态产物，使 Client 与 Registry 
 | `/health` | 健康检查；含 `clientDistReady` 字段 |
 
 配置项 `clientStaticDir`（默认 `../../client/web/dist`）；设为 `false` 可禁用托管。
+如果反向代理把 Registry 挂载到子路径，请同时转发
+`X-Forwarded-Prefix`（例如 `/services/registry`），动态配置和二维码会保留该前缀。
 
 构建 Client 后重启 Registry：
 

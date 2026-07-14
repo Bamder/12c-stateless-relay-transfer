@@ -7,8 +7,23 @@ import pytest
 from fastapi.testclient import TestClient
 
 from registry_server.api.app import create_app
+from registry_server.api.client_static import _safe_public_prefix
 from registry_server.config import AllowlistEntry, RegistryServerConfig
 from registry_server.scheduling.policy import PlacementPolicy
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("/services/registry/", "/services/registry"),
+        ("", ""),
+        ("//attacker.example", ""),
+        ("/safe/../attacker", ""),
+        ("/safe%3Fredirect=attacker", ""),
+    ],
+)
+def test_safe_public_prefix(value: str, expected: str) -> None:
+    assert _safe_public_prefix(value) == expected
 
 
 def _config(database_path: Path, *, client_static_dir: Path | None = None) -> RegistryServerConfig:
@@ -58,6 +73,14 @@ def test_serves_client_index_and_same_origin_relay_config(tmp_path: Path) -> Non
             headers={
                 "x-forwarded-proto": "https",
                 "x-forwarded-host": "registry.example.com",
+                "x-forwarded-prefix": "/services/registry/",
+            },
+        )
+        config_without_prefix = client.get(
+            "/relay.config.json",
+            headers={
+                "x-forwarded-proto": "https",
+                "x-forwarded-host": "registry.example.com",
             },
         )
         api = client.post("/api/relay/resolve", json={"tokens": ["b" * 64]})
@@ -66,8 +89,11 @@ def test_serves_client_index_and_same_origin_relay_config(tmp_path: Path) -> Non
     assert "client" in index.text
     assert config.status_code == 200
     assert config.json() == {
-        "registry": {"url": "https://registry.example.com"},
+        "registry": {"url": "https://registry.example.com/services/registry"},
         "relay": {"maxBodyBytes": 32 * 1024 * 1024},
+    }
+    assert config_without_prefix.json()["registry"] == {
+        "url": "https://registry.example.com",
     }
     assert api.status_code == 200
 
