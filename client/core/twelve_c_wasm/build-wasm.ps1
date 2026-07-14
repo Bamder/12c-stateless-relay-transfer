@@ -143,7 +143,9 @@ function Find-CMakeCommand {
         "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe",
         "C:\Program Files\Microsoft Visual Studio\2022\Professional\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe",
         "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe",
-        "C:\Program Files\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"
+        "C:\Program Files\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe",
+        "C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe",
+        "C:\Program Files (x86)\Microsoft Visual Studio\2019\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"
     )
     foreach ($candidate in $candidates) {
         if (Test-Path -LiteralPath $candidate) {
@@ -154,6 +156,7 @@ function Find-CMakeCommand {
     throw "cmake not found (install CMake 3.20+ or the Visual Studio C++ CMake tools component)"
 }
 
+# Optional: prefer Ninja when present; otherwise fall back to CMake's default generator.
 function Find-NinjaCommand {
     $cmd = Get-Command ninja.exe -ErrorAction SilentlyContinue
     if ($cmd -and $cmd.Source) {
@@ -164,7 +167,9 @@ function Find-NinjaCommand {
         "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja\ninja.exe",
         "C:\Program Files\Microsoft Visual Studio\2022\Professional\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja\ninja.exe",
         "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja\ninja.exe",
-        "C:\Program Files\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja\ninja.exe"
+        "C:\Program Files\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja\ninja.exe",
+        "C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja\ninja.exe",
+        "C:\Program Files (x86)\Microsoft Visual Studio\2019\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja\ninja.exe"
     )
     foreach ($candidate in $candidates) {
         if (Test-Path -LiteralPath $candidate) {
@@ -172,7 +177,7 @@ function Find-NinjaCommand {
         }
     }
 
-    throw "ninja not found (install Ninja or the Visual Studio C++ CMake tools component)"
+    return $null
 }
 
 function Initialize-Emscripten {
@@ -267,7 +272,11 @@ $Ninja = Find-NinjaCommand
 Write-Host "Using Emscripten: $EmscriptenRoot"
 Write-Host "Using emcmake: $Emcmake"
 Write-Host "Using CMake: $CMake"
-Write-Host "Using Ninja: $Ninja"
+if ($Ninja) {
+    Write-Host "Using Ninja: $Ninja"
+} else {
+    Write-Host "Ninja not found; using CMake default generator"
+}
 
 $OpenSslCrypto = Join-Path $ProjectDir "third_party\openssl-emscripten\lib\libcrypto.a"
 if (-not (Test-Path $OpenSslCrypto)) {
@@ -280,7 +289,16 @@ if (-not (Test-Path $OpenSslCrypto)) {
 New-Item -ItemType Directory -Force -Path $BuildDir | Out-Null
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 
-& $Emcmake $CMake -S $ProjectDir -B $BuildDir -G Ninja "-DCMAKE_MAKE_PROGRAM=$Ninja" -DCMAKE_BUILD_TYPE=Release
+$ConfigureArgs = @(
+    "-S", $ProjectDir,
+    "-B", $BuildDir,
+    "-DCMAKE_BUILD_TYPE=Release"
+)
+if ($Ninja) {
+    $ConfigureArgs = @("-G", "Ninja", "-DCMAKE_MAKE_PROGRAM=$Ninja") + $ConfigureArgs
+}
+
+& $Emcmake $CMake @ConfigureArgs
 if ($LASTEXITCODE -ne 0) { throw "emcmake failed" }
 
 & $CMake --build $BuildDir --config Release
