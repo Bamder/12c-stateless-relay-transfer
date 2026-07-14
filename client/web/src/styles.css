@@ -403,20 +403,158 @@ input[type="file"] {
   border-top: 1px solid var(--border);
 }
 
-.send-ttl-section {
-  margin-bottom: 1.25rem;
-  padding-bottom: 1.25rem;
-  border-bottom: 1px solid var(--border);
-}
-
-.send-ttl-section .field-label {
+.settings-section--ttl .field-label {
   display: block;
   margin-bottom: 0.65rem;
 }
 
-.send-ttl-title {
+.send-ttl-quick {
+  margin-bottom: 1.25rem;
+  padding-bottom: 1.1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.send-ttl-quick-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.send-ttl-quick-header .field-label {
+  margin: 0;
+}
+
+.send-ttl-quick-value {
+  color: var(--text-strong);
+  font-size: 1.05rem;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+.send-ttl-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  display: block;
+  width: 100%;
+  height: 1.5rem;
+  margin: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.send-ttl-slider:focus {
+  outline: none;
+}
+
+.send-ttl-slider:focus-visible {
+  outline: none;
+}
+
+.send-ttl-slider:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.send-ttl-slider::-webkit-slider-runnable-track {
+  height: 0.35rem;
+  border-radius: 999px;
+  background: linear-gradient(
+    90deg,
+    var(--accent) 0%,
+    var(--accent) var(--ttl-slider-progress, 45%),
+    var(--progress-track) var(--ttl-slider-progress, 45%),
+    var(--progress-track) 100%
+  );
+}
+
+.send-ttl-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 1.1rem;
+  height: 1.1rem;
+  margin-top: calc((0.35rem - 1.1rem) / 2);
+  border: 2px solid var(--bg);
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent),
+    var(--shadow-sm);
+  transition: transform 120ms ease;
+}
+
+.send-ttl-slider:hover:not(:disabled)::-webkit-slider-thumb {
+  transform: scale(1.08);
+}
+
+.send-ttl-slider:focus-visible::-webkit-slider-thumb {
+  box-shadow: var(--focus-ring),
+    0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent);
+}
+
+.send-ttl-slider::-moz-range-track {
+  height: 0.35rem;
+  border: none;
+  border-radius: 999px;
+  background: linear-gradient(
+    90deg,
+    var(--accent) 0%,
+    var(--accent) var(--ttl-slider-progress, 45%),
+    var(--progress-track) var(--ttl-slider-progress, 45%),
+    var(--progress-track) 100%
+  );
+}
+
+.send-ttl-slider::-moz-range-thumb {
+  width: 1.1rem;
+  height: 1.1rem;
+  border: 2px solid var(--bg);
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent),
+    var(--shadow-sm);
+}
+
+.send-ttl-quick-ticks {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 0.1rem;
+  margin-top: 0.35rem;
+}
+
+.send-ttl-tick {
+  min-width: 0;
+  padding: 0.15rem 0;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.68rem;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+  text-align: center;
+  cursor: pointer;
+}
+
+.send-ttl-tick:hover:not(:disabled) {
   color: var(--text);
-  font-weight: 600;
+}
+
+.send-ttl-tick.is-active {
+  color: var(--accent-dim);
+  font-weight: 650;
+}
+
+.send-ttl-tick:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.send-ttl-tick:focus-visible {
+  outline: none;
+  border-radius: 4px;
+  box-shadow: var(--focus-ring);
 }
 
 .duration-input-row {
@@ -1500,6 +1638,10 @@ input[type="file"] {
 
   .send-btn {
     width: 100%;
+  }
+
+  .send-ttl-tick {
+    font-size: 0.6rem;
   }
 
   .credential-style-footer {

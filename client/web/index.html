@@ -177,50 +177,35 @@
           <div id="send-error" class="banner error hidden"></div>
           <div id="send-info" class="banner info hidden"></div>
           <div class="card send-card">
-            <div class="send-ttl-section">
-              <span class="field-label send-ttl-title">文件与二维码有效期</span>
-              <div class="duration-input-row">
-                <label class="duration-field">
-                  <input
-                    id="file-ttl-hours"
-                    type="number"
-                    min="0"
-                    max="24"
-                    inputmode="numeric"
-                    placeholder="0-24"
-                  />
-                  <span class="duration-unit">时</span>
-                </label>
-                <label class="duration-field">
-                  <input
-                    id="file-ttl-minutes"
-                    type="number"
-                    min="0"
-                    max="59"
-                    inputmode="numeric"
-                    placeholder="0-59"
-                  />
-                  <span class="duration-unit">分</span>
-                </label>
-                <label class="duration-field">
-                  <input
-                    id="file-ttl-seconds"
-                    type="number"
-                    min="0"
-                    max="59"
-                    inputmode="numeric"
-                    placeholder="0-59"
-                  />
-                  <span class="duration-unit">秒</span>
-                </label>
-                <button id="confirm-file-ttl-btn" type="button" class="ghost-btn duration-confirm-btn">
-                  确认
-                </button>
+            <div class="send-ttl-quick">
+              <div class="send-ttl-quick-header">
+                <span class="field-label" id="send-ttl-quick-label">有效期</span>
+                <span id="send-ttl-quick-value" class="send-ttl-quick-value">1小时</span>
               </div>
-              <p class="hint hint-small">
-                当前有效期：<span id="file-ttl-current">1小时0分钟0秒</span>；从上传预留时开始计算，
-                可设置 1 秒至 24 小时。
-              </p>
+              <input
+                id="send-ttl-slider"
+                class="send-ttl-slider"
+                type="range"
+                min="0"
+                max="11"
+                step="1"
+                value="5"
+                aria-labelledby="send-ttl-quick-label send-ttl-quick-value"
+              />
+              <div class="send-ttl-quick-ticks" aria-hidden="true">
+                <button type="button" class="send-ttl-tick" data-ttl-preset-index="0">5m</button>
+                <button type="button" class="send-ttl-tick" data-ttl-preset-index="1">10m</button>
+                <button type="button" class="send-ttl-tick" data-ttl-preset-index="2">15m</button>
+                <button type="button" class="send-ttl-tick" data-ttl-preset-index="3">20m</button>
+                <button type="button" class="send-ttl-tick" data-ttl-preset-index="4">30m</button>
+                <button type="button" class="send-ttl-tick" data-ttl-preset-index="5">1h</button>
+                <button type="button" class="send-ttl-tick" data-ttl-preset-index="6">2h</button>
+                <button type="button" class="send-ttl-tick" data-ttl-preset-index="7">4h</button>
+                <button type="button" class="send-ttl-tick" data-ttl-preset-index="8">6h</button>
+                <button type="button" class="send-ttl-tick" data-ttl-preset-index="9">12h</button>
+                <button type="button" class="send-ttl-tick" data-ttl-preset-index="10">18h</button>
+                <button type="button" class="send-ttl-tick" data-ttl-preset-index="11">24h</button>
+              </div>
             </div>
 
             <div class="send-row">
@@ -476,6 +461,51 @@
             <div class="button-row">
               <button id="save-settings-btn" type="button" class="primary-btn">保存并重连</button>
               <button id="reset-settings-btn" type="button" class="ghost-btn">恢复默认</button>
+            </div>
+
+            <div class="settings-section settings-section--ttl">
+              <span class="field-label">文件与二维码有效期</span>
+              <div class="duration-input-row">
+                <label class="duration-field">
+                  <input
+                    id="file-ttl-hours"
+                    type="number"
+                    min="0"
+                    max="24"
+                    inputmode="numeric"
+                    placeholder="0-24"
+                  />
+                  <span class="duration-unit">时</span>
+                </label>
+                <label class="duration-field">
+                  <input
+                    id="file-ttl-minutes"
+                    type="number"
+                    min="0"
+                    max="59"
+                    inputmode="numeric"
+                    placeholder="0-59"
+                  />
+                  <span class="duration-unit">分</span>
+                </label>
+                <label class="duration-field">
+                  <input
+                    id="file-ttl-seconds"
+                    type="number"
+                    min="0"
+                    max="59"
+                    inputmode="numeric"
+                    placeholder="0-59"
+                  />
+                  <span class="duration-unit">秒</span>
+                </label>
+                <button id="confirm-file-ttl-btn" type="button" class="ghost-btn duration-confirm-btn">
+                  确认
+                </button>
+              </div>
+              <p class="hint hint-small">
+                当前有效期：<span id="file-ttl-current">1小时0分钟0秒</span>；从登记数据位置时开始计算，可设置 1 秒至 24 小时。
+              </p>
             </div>
 
             <div class="settings-section settings-section--credential-style">

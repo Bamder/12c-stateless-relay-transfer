@@ -48,7 +48,10 @@ import { formatUnknownError } from './format-error.js';
 import {
   clampDurationParts,
   durationPartsFromSeconds,
+  fileTtlPresetSecondsAt,
   formatDurationLabel,
+  formatFileTtlQuickLabel,
+  nearestFileTtlPresetIndex,
 } from './file-ttl.js';
 import {
   getEffectiveCredentialStyle,
@@ -84,6 +87,9 @@ interface Elements {
   sendFileIcon: HTMLElement;
   sendUploadStamp: HTMLElement;
   sendBtn: HTMLButtonElement;
+  sendTtlSlider: HTMLInputElement;
+  sendTtlQuickValue: HTMLElement;
+  sendTtlTicks: NodeListOf<HTMLButtonElement>;
   sendError: HTMLElement;
   sendInfo: HTMLElement;
   sendUploadStatus: HTMLElement;
@@ -215,6 +221,9 @@ function collectElements(): Elements {
     sendFileIcon: $('send-file-icon'),
     sendUploadStamp: $('send-upload-stamp'),
     sendBtn: $('send-btn') as HTMLButtonElement,
+    sendTtlSlider: $('send-ttl-slider') as HTMLInputElement,
+    sendTtlQuickValue: $('send-ttl-quick-value'),
+    sendTtlTicks: document.querySelectorAll<HTMLButtonElement>('.send-ttl-tick'),
     sendError: $('send-error'),
     sendInfo: $('send-info'),
     sendUploadStatus: $('send-upload-status'),
@@ -393,6 +402,10 @@ function showUploadStamp(): void {
 function updateSendControls(): void {
   el.sendBtn.disabled = sendInProgress || !selectedFile;
   el.sendFileInput.disabled = sendInProgress;
+  el.sendTtlSlider.disabled = sendInProgress;
+  for (const tick of el.sendTtlTicks) {
+    tick.disabled = sendInProgress;
+  }
   el.fileTtlHoursInput.disabled = sendInProgress;
   el.fileTtlMinutesInput.disabled = sendInProgress;
   el.fileTtlSecondsInput.disabled = sendInProgress;
@@ -583,7 +596,7 @@ function showSendShare(
     reservation?.grantedTtlSeconds ?? requestedTtlSeconds;
   el.sendShareTtl.textContent =
     `服务器实际有效时长：${formatDurationLabel(grantedTtlSeconds)}` +
-    '（从上传预留时开始计时）';
+    '（从登记数据位置时开始计时）';
 
   try {
     const client = requireRuntime();
@@ -649,15 +662,7 @@ async function handleSend(): Promise<void> {
     return;
   }
 
-  const ttlParts = readDurationInputs();
-  if (ttlParts.totalSeconds <= 0) {
-    showBanner(el.sendError, '文件与二维码有效期必须大于 0 秒');
-    return;
-  }
-  applyDurationPartsToInputs(ttlParts);
-  saveStoredFileTtlSeconds(ttlParts.totalSeconds);
-  updateFileTtlCurrentLabel(ttlParts.totalSeconds);
-  const requestedTtlSeconds = ttlParts.totalSeconds;
+  const requestedTtlSeconds = getEffectiveFileTtlSeconds();
 
   const client = requireRuntime();
   const display = credentialDisplay;
@@ -1229,10 +1234,33 @@ function updateFileTtlCurrentLabel(totalSeconds: number): void {
   el.fileTtlCurrent.textContent = formatDurationLabel(totalSeconds);
 }
 
-function syncFileTtlSettingsUi(): void {
-  const totalSeconds = getEffectiveFileTtlSeconds();
+function updateSendTtlTickActive(index: number): void {
+  for (const tick of el.sendTtlTicks) {
+    const tickIndex = Number(tick.dataset.ttlPresetIndex);
+    tick.classList.toggle('is-active', tickIndex === index);
+  }
+}
+
+function syncSendTtlQuickUi(totalSeconds: number): void {
+  const index = nearestFileTtlPresetIndex(totalSeconds);
+  const maxIndex = Math.max(1, Number(el.sendTtlSlider.max) || 1);
+  el.sendTtlSlider.value = String(index);
+  el.sendTtlSlider.style.setProperty(
+    '--ttl-slider-progress',
+    `${(index / maxIndex) * 100}%`,
+  );
+  el.sendTtlQuickValue.textContent = formatFileTtlQuickLabel(totalSeconds);
+  updateSendTtlTickActive(index);
+}
+
+function applyFileTtlToUi(totalSeconds: number): void {
   applyDurationPartsToInputs(durationPartsFromSeconds(totalSeconds));
   updateFileTtlCurrentLabel(totalSeconds);
+  syncSendTtlQuickUi(totalSeconds);
+}
+
+function syncFileTtlSettingsUi(): void {
+  applyFileTtlToUi(getEffectiveFileTtlSeconds());
 }
 
 function readDurationInputs(): ReturnType<typeof clampDurationParts> {
@@ -1243,20 +1271,30 @@ function readDurationInputs(): ReturnType<typeof clampDurationParts> {
   );
 }
 
+function applyFileTtlPresetIndex(index: number): void {
+  const totalSeconds = fileTtlPresetSecondsAt(index);
+  saveStoredFileTtlSeconds(totalSeconds);
+  applyFileTtlToUi(totalSeconds);
+}
+
+function handleSendTtlSliderInput(): void {
+  const index = Number(el.sendTtlSlider.value);
+  applyFileTtlPresetIndex(index);
+}
+
 function handleConfirmFileTtl(): void {
-  clearBanner(el.sendError);
-  clearBanner(el.sendInfo);
+  clearBanner(el.settingsError);
+  clearBanner(el.settingsInfo);
 
   const parts = readDurationInputs();
   if (parts.totalSeconds <= 0) {
-    showBanner(el.sendError, '文件与二维码有效期必须大于 0 秒');
+    showBanner(el.settingsError, '文件与二维码有效期必须大于 0 秒');
     return;
   }
 
-  applyDurationPartsToInputs(parts);
   saveStoredFileTtlSeconds(parts.totalSeconds);
-  updateFileTtlCurrentLabel(parts.totalSeconds);
-  showBanner(el.sendInfo, '文件与二维码有效期已更新。');
+  applyFileTtlToUi(parts.totalSeconds);
+  showBanner(el.settingsInfo, '文件与二维码有效期已更新。');
 }
 
 // ============================================================================
@@ -1526,6 +1564,23 @@ function bindEvents(): void {
   el.confirmFileTtlBtn.addEventListener('click', () => {
     handleConfirmFileTtl();
   });
+
+  el.sendTtlSlider.addEventListener('input', () => {
+    handleSendTtlSliderInput();
+  });
+
+  for (const tick of el.sendTtlTicks) {
+    tick.addEventListener('click', () => {
+      if (sendInProgress) {
+        return;
+      }
+      const index = Number(tick.dataset.ttlPresetIndex);
+      if (!Number.isFinite(index)) {
+        return;
+      }
+      applyFileTtlPresetIndex(index);
+    });
+  }
 
   el.confirmCredentialStyleBtn.addEventListener('click', () => {
     handleConfirmCredentialStyle();
