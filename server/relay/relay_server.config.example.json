@@ -13,7 +13,6 @@
   "registryApiKeyInitialUses": 100,
   "registry": {
     "url": "https://registry.example.com",
-    "httpProxy": "http://corp-proxy:8080",
     "autoRegisterOnStartup": false
   }
 }
