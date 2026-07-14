@@ -15,4 +15,11 @@ export type UploadStatusUpdate =
       completed: number;
       inFlight: number;
       total: number;
+      /**
+       * Whole primary-stripe PUT progress (monotonic).
+       * = finished blocks + in-flight XHR bytes.
+       */
+      transferBytesTransferred?: number;
+      /** Sum of all primary wire-block body sizes (stable for this upload). */
+      transferBytesTotal?: number;
     };

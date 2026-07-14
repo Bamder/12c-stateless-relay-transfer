@@ -23,8 +23,13 @@ export type { DownloadStatusUpdate } from './download-status.js';
 
 export {
   DEFAULT_BROWSER_RECEIVE_MEMORY_BUDGET_BYTES,
+  MOBILE_BROWSER_RECEIVE_MEMORY_BUDGET_BYTES,
+  MIN_BROWSER_RECEIVE_MEMORY_BUDGET_BYTES,
+  MAX_BROWSER_RECEIVE_MEMORY_BUDGET_BYTES,
+  MAX_MOBILE_BROWSER_RECEIVE_MEMORY_BUDGET_BYTES,
   MIN_BROWSER_RECEIVE_PREFETCH,
   MAX_BROWSER_RECEIVE_PREFETCH,
+  probeBrowserReceiveMemoryBudgetBytes,
   resolveBrowserReceivePrefetchCount,
   resolveReceivePrefetchCount,
 } from '../protocol/receive-prefetch-policy.js';
@@ -63,18 +68,58 @@ function assertWireBlockSize(
   return data;
 }
 
+function transportInFlight(transport: ReceiveTransport): number {
+  return transport.inFlightCount?.() ?? 0;
+}
+
+function transportInFlightBytes(transport: ReceiveTransport): number {
+  if (!(transport instanceof FetchReceiveTransport)) {
+    return 0;
+  }
+  return transport.getByteWindowSnapshot().windowBytesTransferred;
+}
+
+function downloadingStatus(
+  transport: ReceiveTransport,
+  completed: number,
+  total: number,
+  wireBlockSize: number,
+): DownloadStatusUpdate {
+  const transferBytesTotal =
+    wireBlockSize > 0 && total > 0 ? wireBlockSize * total : undefined;
+  const transferBytesTransferred =
+    transferBytesTotal !== undefined
+      ? Math.min(
+          transferBytesTotal,
+          completed * wireBlockSize + transportInFlightBytes(transport),
+        )
+      : undefined;
+  return {
+    phase: 'downloading',
+    completed,
+    total,
+    inFlight: transportInFlight(transport),
+    ...(transferBytesTransferred !== undefined
+      ? { transferBytesTransferred }
+      : {}),
+    ...(transferBytesTotal !== undefined ? { transferBytesTotal } : {}),
+  };
+}
+
 function prefetchIndexRange(
   transport: ReceiveTransport,
   twelveC: TwelveCClient,
   searchCode: string,
   fromInclusive: number,
   toExclusive: number,
-): void {
+): Promise<void> {
   if (fromInclusive >= toExclusive) {
-    return;
+    return Promise.resolve();
   }
-  transport.startConcurrentGet(
-    deriveIndexTokens(twelveC, searchCode, fromInclusive, toExclusive),
+  return Promise.resolve(
+    transport.startConcurrentGet(
+      deriveIndexTokens(twelveC, searchCode, fromInclusive, toExclusive),
+    ),
   );
 }
 
@@ -143,7 +188,7 @@ async function decryptDownloadedLargeFile(
       total: totalTokens,
     });
     await yieldToBrowser();
-    prefetchIndexRange(
+    await prefetchIndexRange(
       transport,
       twelveC,
       searchCode,
@@ -151,11 +196,9 @@ async function decryptDownloadedLargeFile(
       windowEnd,
     );
 
-    onStatus?.({
-      phase: 'downloading',
-      completed: tokenIndex,
-      total: totalTokens,
-    });
+    onStatus?.(
+      downloadingStatus(transport, tokenIndex, totalTokens, wireBlockSize),
+    );
     const token = twelveC.deriveUploadToken(searchCode, tokenIndex);
     const wire = assertWireBlockSize(
       token,
@@ -164,11 +207,9 @@ async function decryptDownloadedLargeFile(
     );
     session.addWireToken(tokenIndex, wire);
     await plaintext.drainSession(session);
-    onStatus?.({
-      phase: 'downloading',
-      completed: tokenIndex + 1,
-      total: totalTokens,
-    });
+    onStatus?.(
+      downloadingStatus(transport, tokenIndex + 1, totalTokens, wireBlockSize),
+    );
     if (tokenIndex % 4 === 0) {
       await yieldToBrowser();
     }
@@ -178,14 +219,48 @@ async function decryptDownloadedLargeFile(
   return await finalizeReceiveDecryptToBlob(session, plaintext);
 }
 
+type DownloadActivityContext = {
+  smbParsed: boolean;
+  totalTokens: number;
+  completed: number;
+  wireBlockSize: number;
+};
+
+function downloadTransferBytes(
+  context: DownloadActivityContext,
+  inFlightBytes: number,
+): {
+  transferBytesTransferred?: number;
+  transferBytesTotal?: number;
+} {
+  if (
+    !context.smbParsed ||
+    context.totalTokens <= 0 ||
+    context.wireBlockSize <= 0
+  ) {
+    return {};
+  }
+  const transferBytesTotal = context.wireBlockSize * context.totalTokens;
+  return {
+    transferBytesTotal,
+    transferBytesTransferred: Math.min(
+      transferBytesTotal,
+      context.completed * context.wireBlockSize + inFlightBytes,
+    ),
+  };
+}
+
 function mapTransportActivityToStatus(
   activity: ReceiveTransportActivity,
   token0: string,
-  context: { smbParsed: boolean; totalTokens: number },
+  context: DownloadActivityContext,
+  inFlight: number,
+  inFlightBytes: number,
 ): DownloadStatusUpdate | null {
   switch (activity.kind) {
     case 'resolving':
-      if (!context.smbParsed) {
+      // After download has started, sliding-window resolve stays background-only.
+      if (!context.smbParsed || context.completed > 0) {
         return null;
       }
       return {
@@ -195,10 +270,36 @@ function mapTransportActivityToStatus(
         total: context.totalTokens,
       };
     case 'download_started':
-      if (activity.token !== token0) {
+      if (!context.smbParsed) {
+        if (activity.token !== token0) {
+          return null;
+        }
+        return {
+          phase: 'awaiting_metadata_block',
+          prefetchCount: Math.max(1, inFlight),
+        };
+      }
+      if (context.totalTokens <= 0) {
         return null;
       }
-      return { phase: 'awaiting_metadata_block' };
+      return {
+        phase: 'downloading',
+        completed: context.completed,
+        total: context.totalTokens,
+        inFlight,
+        ...downloadTransferBytes(context, inFlightBytes),
+      };
+    case 'download_byte_progress':
+      if (!context.smbParsed || context.totalTokens <= 0) {
+        return null;
+      }
+      return {
+        phase: 'downloading',
+        completed: context.completed,
+        total: context.totalTokens,
+        inFlight,
+        ...downloadTransferBytes(context, activity.windowBytesTransferred),
+      };
     case 'waiting':
       if (activity.token !== token0) {
         return null;
@@ -216,7 +317,7 @@ function mapTransportActivityToStatus(
 function attachDownloadActivityListener(
   transport: ReceiveTransport,
   token0: string,
-  context: { smbParsed: boolean; totalTokens: number },
+  context: DownloadActivityContext,
   onStatus?: (status: DownloadStatusUpdate) => void,
 ): () => void {
   if (!(transport instanceof FetchReceiveTransport) || onStatus === undefined) {
@@ -224,7 +325,15 @@ function attachDownloadActivityListener(
   }
 
   transport.setActivityListener((activity) => {
-    const status = mapTransportActivityToStatus(activity, token0, context);
+    const inFlightBytes =
+      transport.getByteWindowSnapshot().windowBytesTransferred;
+    const status = mapTransportActivityToStatus(
+      activity,
+      token0,
+      context,
+      transport.inFlightCount(),
+      inFlightBytes,
+    );
     if (status !== null) {
       onStatus(status);
     }
@@ -259,30 +368,67 @@ export async function downloadAdaptive(
   const { searchCode } = splitCredential(credential);
   const token0 = twelveC.deriveUploadToken(searchCode, 0);
 
-  const activityContext = { smbParsed: false, totalTokens: 0 };
+  const activityContext: DownloadActivityContext = {
+    smbParsed: false,
+    totalTokens: 0,
+    completed: 0,
+    wireBlockSize: 0,
+  };
+  let transferBytesHighWater = 0;
+
+  const reportStatus = (status: DownloadStatusUpdate): void => {
+    if (status.phase === 'downloading') {
+      activityContext.completed = status.completed;
+      if (
+        status.transferBytesTransferred !== undefined &&
+        status.transferBytesTotal !== undefined
+      ) {
+        transferBytesHighWater = Math.max(
+          transferBytesHighWater,
+          status.transferBytesTransferred,
+        );
+        onStatus?.({
+          ...status,
+          transferBytesTransferred: Math.min(
+            status.transferBytesTotal,
+            transferBytesHighWater,
+          ),
+        });
+        return;
+      }
+    }
+    onStatus?.(status);
+  };
 
   const detachActivityListener = attachDownloadActivityListener(
     transport,
     token0,
     activityContext,
-    onStatus,
+    onStatus === undefined ? undefined : reportStatus,
   );
 
   try {
-    onStatus?.({
+    reportStatus({
       phase: 'resolving_initial',
       fromIndex: 0,
       toIndex: estimatedM,
       total: estimatedM,
     });
     await yieldToBrowser();
-    prefetchIndexRange(transport, twelveC, searchCode, 0, estimatedM);
+    await prefetchIndexRange(transport, twelveC, searchCode, 0, estimatedM);
+    reportStatus({
+      phase: 'awaiting_metadata_block',
+      prefetchCount: Math.max(estimatedM, transportInFlight(transport)),
+    });
 
     const token0Wire = cloneWireBlock(await transport.get(token0));
 
-    onStatus?.({ phase: 'parsing_metadata' });
+    reportStatus({ phase: 'parsing_metadata' });
     const metadata = twelveC.parseSmbEncrypted(credential, token0Wire);
     const wireBlockSize = metadata.wireBlockSize;
+    if (transport instanceof FetchReceiveTransport) {
+      transport.setExpectedWireBlockBytes(wireBlockSize);
+    }
 
     if (token0Wire.length !== wireBlockSize) {
       throw new Error(
@@ -294,6 +440,8 @@ export async function downloadAdaptive(
     const totalTokens = metadata.numTokens;
     activityContext.smbParsed = true;
     activityContext.totalTokens = totalTokens;
+    activityContext.completed = 1;
+    activityContext.wireBlockSize = wireBlockSize;
     const concurrentM = resolveReceivePrefetchCount(wireBlockSize, {
       explicit: options.initialTokens,
       relayMaxBodyBytes,
@@ -322,7 +470,7 @@ export async function downloadAdaptive(
     const useStreamingDecrypt =
       metadata.originalFileLength > V21_WHOLE_FILE_THRESHOLD_BYTES;
 
-    onStatus?.({ phase: 'downloading', completed: 1, total: totalTokens });
+    reportStatus(downloadingStatus(transport, 1, totalTokens, wireBlockSize));
 
     if (useStreamingDecrypt) {
       const data = await decryptDownloadedLargeFile(
@@ -335,7 +483,7 @@ export async function downloadAdaptive(
         metadata.originalFileLength,
         transport,
         concurrentM,
-        onStatus,
+        reportStatus,
       );
       if (!byteLengthsEqual(data.size, metadata.originalFileLength)) {
         throw new Error(
@@ -348,19 +496,15 @@ export async function downloadAdaptive(
 
     if (plan.fetchAfterSmb.length > 0) {
       const fromIndex = Math.min(concurrentM, totalTokens);
-      onStatus?.({
+      reportStatus({
         phase: 'resolving_window',
         fromIndex,
         toIndex: totalTokens,
         total: totalTokens,
       });
       await yieldToBrowser();
-      transport.startConcurrentGet(plan.fetchAfterSmb);
-      onStatus?.({
-        phase: 'downloading',
-        completed: 1,
-        total: totalTokens,
-      });
+      await Promise.resolve(transport.startConcurrentGet(plan.fetchAfterSmb));
+      reportStatus(downloadingStatus(transport, 1, totalTokens, wireBlockSize));
     }
 
     const uploads: UploadMap = new Map([[token0, token0Wire]]);
@@ -371,14 +515,17 @@ export async function downloadAdaptive(
         token,
         assertWireBlockSize(token, await transport.get(token), wireBlockSize),
       );
-      onStatus?.({
-        phase: 'downloading',
-        completed: tokenIndex + 1,
-        total: totalTokens,
-      });
+      reportStatus(
+        downloadingStatus(
+          transport,
+          tokenIndex + 1,
+          totalTokens,
+          wireBlockSize,
+        ),
+      );
     }
 
-    onStatus?.({ phase: 'decrypting', total: totalTokens });
+    reportStatus({ phase: 'decrypting', total: totalTokens });
 
     const plaintext = twelveC.receiveFromUploadMap(credential, uploads);
     return {

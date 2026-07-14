@@ -57,7 +57,10 @@ export class UploadPrepareWorkerClient {
       pending.resolve(message);
     };
     worker.onerror = (event) => {
-      this.rejectAll(new Error(event.message || 'upload prepare worker failed'));
+      const detail = event.message?.trim()
+        || (event.filename ? `failed to load ${event.filename}` : '')
+        || 'upload prepare worker failed';
+      this.rejectAll(new Error(detail));
     };
   }
 

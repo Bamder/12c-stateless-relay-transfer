@@ -265,6 +265,23 @@ function formatBytes(size: number): string {
   return `${(size / (1024 * 1024)).toFixed(2)} MB`;
 }
 
+/** Whole-transfer byte progress: stable denominator, monotonic numerator. */
+function formatTransferBytesProgress(
+  transferred: number | undefined,
+  total: number | undefined,
+): string {
+  if (
+    total === undefined ||
+    !Number.isFinite(total) ||
+    total <= 0 ||
+    transferred === undefined ||
+    !Number.isFinite(transferred)
+  ) {
+    return '';
+  }
+  return `（${formatBytes(Math.max(0, transferred))} / ${formatBytes(total)}）`;
+}
+
 function setBootProgress(ratio: number, message: string): void {
   el.bootStatus.textContent = message;
   el.bootProgressBar.style.width = `${Math.max(0, Math.min(100, ratio * 100))}%`;
@@ -442,10 +459,14 @@ function setSendUploadStatus(
 
   if (status.phase === 'uploading') {
     sendPrepareProgressRatio = 0;
+    const transferHint = formatTransferBytesProgress(
+      status.transferBytesTransferred,
+      status.transferBytesTotal,
+    );
     el.sendProgressText.textContent =
       status.inFlight > 0
-        ? `${status.completed} / ${status.total}（${status.inFlight} 进行中）`
-        : `${status.completed} / ${status.total}`;
+        ? `${status.completed} / ${status.total}（${status.inFlight} 进行中）${transferHint}`
+        : `${status.completed} / ${status.total}${transferHint}`;
     if (status.completed >= status.total) {
       el.sendProgressTrack.classList.remove('indeterminate');
       el.sendProgressBar.style.width = '100%';
@@ -690,8 +711,16 @@ function formatDownloadStatusMessage(status: DownloadStatusUpdate): string {
       }
       return `正在定位接收窗口（第 ${from}–${to} 块，共 ${status.total} 块）`;
     }
-    case 'awaiting_metadata_block':
-      return '块并行传输中';
+    case 'awaiting_metadata_block': {
+      const n = status.prefetchCount ?? 0;
+      if (n > 1) {
+        return `正在预获取 ${n} 块数据`;
+      }
+      if (n === 1) {
+        return '正在预获取 1 块数据';
+      }
+      return '正在预获取数据';
+    }
     case 'waiting_metadata_block':
       if (status.reason === 'registry') {
         return '等待发送方上传（首块尚未就绪，将自动继续）';
@@ -703,11 +732,20 @@ function formatDownloadStatusMessage(status: DownloadStatusUpdate): string {
       if (status.completed >= status.total) {
         return '下载完成';
       }
+      if (status.completed === 0 && (status.inFlight ?? 0) > 0) {
+        return status.total > 1
+          ? `正在下载首批数据（0 / ${status.total} 已完成，${status.inFlight} 路已发出）`
+          : '正在下载';
+      }
       if (status.completed === 1 && status.total > 1) {
-        return `正在下载（SMB 已就绪，${status.completed} / ${status.total} 块已完成）`;
+        const lanes =
+          (status.inFlight ?? 0) > 0 ? `，${status.inFlight} 路进行中` : '';
+        return `正在下载（SMB 已就绪，${status.completed} / ${status.total} 块已完成${lanes}）`;
       }
       return status.total > 1
-        ? `正在下载（${status.completed} / ${status.total} 块已完成）`
+        ? `正在下载（${status.completed} / ${status.total} 块已完成${
+            (status.inFlight ?? 0) > 0 ? `，${status.inFlight} 路进行中` : ''
+          }）`
         : '正在下载';
     case 'decrypting':
       return '正在解密文件内容';
@@ -739,17 +777,32 @@ function setReceiveDownloadStatus(status: DownloadStatusUpdate | null): void {
 }
 
 let receiveDownloadStatusRank = 0;
-let receiveDownloadBlockProgress: { completed: number; total: number } | null =
-  null;
+let receiveDownloadBlockProgress: {
+  completed: number;
+  total: number;
+  transferBytesTransferred?: number;
+  transferBytesTotal?: number;
+} | null = null;
 let receiveDownloadBlockProgressLocked = false;
 
 function paintReceiveDownloadBlockProgress(): void {
   if (receiveDownloadBlockProgress === null) {
     return;
   }
-  const { completed, total } = receiveDownloadBlockProgress;
+  const {
+    completed,
+    total,
+    transferBytesTransferred,
+    transferBytesTotal,
+  } = receiveDownloadBlockProgress;
+  const transferHint = formatTransferBytesProgress(
+    transferBytesTransferred,
+    transferBytesTotal,
+  );
   el.receiveDownloadProgressText.classList.remove('hidden');
-  el.receiveDownloadProgressText.textContent = `${completed} / ${total}`;
+  el.receiveDownloadProgressText.textContent = transferHint
+    ? `${completed} / ${total}${transferHint}`
+    : `${completed} / ${total}`;
   el.receiveDownloadRingFill.style.strokeDasharray = '';
   const ratio = total > 0 ? completed / total : 0;
   el.receiveDownloadRingFill.style.strokeDashoffset = String(
@@ -760,8 +813,17 @@ function paintReceiveDownloadBlockProgress(): void {
 function rememberReceiveDownloadBlockProgress(
   completed: number,
   total: number,
+  transferBytesTransferred?: number,
+  transferBytesTotal?: number,
 ): void {
-  receiveDownloadBlockProgress = { completed, total };
+  receiveDownloadBlockProgress = {
+    completed,
+    total,
+    ...(transferBytesTransferred !== undefined
+      ? { transferBytesTransferred }
+      : {}),
+    ...(transferBytesTotal !== undefined ? { transferBytesTotal } : {}),
+  };
   receiveDownloadBlockProgressLocked = true;
 }
 
@@ -791,19 +853,20 @@ function setReceiveDownloadProgress(status: DownloadStatusUpdate | null): void {
   }
 
   if (status.phase === 'resolving_window') {
-    if (!receiveDownloadBlockProgressLocked) {
-      receiveDownloadStatusRank = Math.max(
-        receiveDownloadStatusRank,
-        RECEIVE_DOWNLOAD_PHASE_RANK.resolving_window,
-      );
+    // After block progress is live, keep downloading text; resolve is just
+    // background steering for the sliding window and must not cover it.
+    if (receiveDownloadBlockProgressLocked) {
+      paintReceiveDownloadBlockProgress();
+      return;
     }
+    receiveDownloadStatusRank = Math.max(
+      receiveDownloadStatusRank,
+      RECEIVE_DOWNLOAD_PHASE_RANK.resolving_window,
+    );
     el.receiveDownloadBtn.classList.remove(
       'receive-download-trigger--ring-indeterminate',
     );
     setReceiveDownloadStatus(status);
-    if (receiveDownloadBlockProgressLocked) {
-      paintReceiveDownloadBlockProgress();
-    }
     return;
   }
 
@@ -817,7 +880,12 @@ function setReceiveDownloadProgress(status: DownloadStatusUpdate | null): void {
   receiveDownloadStatusRank = rank;
 
   if (status.phase === 'downloading') {
-    rememberReceiveDownloadBlockProgress(status.completed, status.total);
+    rememberReceiveDownloadBlockProgress(
+      status.completed,
+      status.total,
+      status.transferBytesTransferred,
+      status.transferBytesTotal,
+    );
   }
 
   el.receiveDownloadBtn.classList.remove('receive-download-trigger--ring-indeterminate');

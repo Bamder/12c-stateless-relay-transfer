@@ -9,6 +9,7 @@ import {
   canUseUploadPrepareWorker,
   createDefaultUploadPrepareWorker,
   UploadPrepareWorkerClient,
+  type UploadPrepareWorkerInitOptions,
 } from '../wasm/upload-prepare-worker-client.js';
 import {
   DEFAULT_UPLOAD_WASM_BINARY_URL,
@@ -29,6 +30,7 @@ import {
   type RelayHopProtocol,
 } from '../resilience/stripe-put-concurrency.js';
 import type { RelayEndpointMap } from '../router/relay-router.js';
+import { InFlightByteWindowMeter } from '../transport/byte-transfer-progress.js';
 import { runAsyncReplicaReplication } from './replica-replication.js';
 import type { UploadStatusUpdate } from './upload-status.js';
 import {
@@ -346,13 +348,28 @@ async function uploadStripePrimaryBlocks(
   let completed = 0;
   let inFlight = 0;
   let nextIndex = 0;
+  let completedBytes = 0;
+  const transferBytesTotal = entries.reduce(
+    (sum, [, blob]) => sum + blob.byteLength,
+    0,
+  );
+  const windowMeter = new InFlightByteWindowMeter();
+  let transferBytesHighWater = 0;
 
   const reportUploading = (): void => {
+    const window = windowMeter.snapshot();
+    const transferBytesTransferred = Math.max(
+      transferBytesHighWater,
+      completedBytes + window.windowBytesTransferred,
+    );
+    transferBytesHighWater = transferBytesTransferred;
     onProgress?.({
       phase: 'uploading',
       completed,
       inFlight,
       total,
+      transferBytesTransferred,
+      transferBytesTotal,
     });
   };
 
@@ -374,15 +391,34 @@ async function uploadStripePrimaryBlocks(
       if (endpoint === undefined) {
         throw new Error(`no stripe primary relay endpoint for token: ${token}`);
       }
+      const laneId = `${token}:${current}`;
       inFlight++;
+      windowMeter.begin(laneId, blob.byteLength);
       reportUploading();
       try {
-        await putWithRetry(uploadClient, endpoint, blob, {
-          maxAttempts: options.putMaxAttempts,
-          transientMaxAttempts: options.putTransientMaxAttempts,
-          baseDelayMs: options.putRetryDelayMs,
-        });
+        await putWithRetry(
+          uploadClient,
+          endpoint,
+          blob,
+          {
+            maxAttempts: options.putMaxAttempts,
+            transientMaxAttempts: options.putTransientMaxAttempts,
+            baseDelayMs: options.putRetryDelayMs,
+          },
+          {
+            onUploadProgress: (progress) => {
+              windowMeter.setTransferred(laneId, progress.bytesTransferred);
+              reportUploading();
+            },
+          },
+        );
+        // Move bytes from the in-flight lane into completed before ending the lane
+        // so concurrent progress reports never dip by one full block.
+        completedBytes += blob.byteLength;
+        windowMeter.end(laneId);
+        completed++;
       } catch (cause) {
+        windowMeter.end(laneId);
         const attempts =
           cause instanceof PutRetryExhaustedError
             ? cause.attempts
@@ -393,7 +429,6 @@ async function uploadStripePrimaryBlocks(
       } finally {
         inFlight--;
       }
-      completed++;
       reportUploading();
     }
   }
@@ -656,6 +691,36 @@ async function executePrepareUploadStreaming(
   );
 }
 
+/** Worker 创建 + init 最多尝试次数；第二次仍失败则由上层回退主线程。 */
+const UPLOAD_PREPARE_WORKER_CREATE_ATTEMPTS = 2;
+
+async function createInitializedUploadPrepareWorker(
+  createWorker: () => Worker,
+  initOptions: UploadPrepareWorkerInitOptions,
+): Promise<UploadPrepareWorkerClient> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= UPLOAD_PREPARE_WORKER_CREATE_ATTEMPTS; attempt++) {
+    let client: UploadPrepareWorkerClient | null = null;
+    try {
+      client = new UploadPrepareWorkerClient(createWorker());
+      await client.init(initOptions);
+      return client;
+    } catch (error) {
+      lastError = error;
+      client?.dispose();
+      if (attempt < UPLOAD_PREPARE_WORKER_CREATE_ATTEMPTS) {
+        console.warn(
+          'Upload prepare worker create/init failed; retrying',
+          error,
+        );
+      }
+    }
+  }
+  throw lastError instanceof Error
+    ? lastError
+    : new Error(String(lastError ?? 'upload prepare worker create failed'));
+}
+
 async function prepareUploadStreamingInWorker(
   file: File,
   credential: string,
@@ -680,8 +745,15 @@ async function prepareUploadStreamingInWorker(
 
   const createWorker =
     options.createUploadWorker ?? createDefaultUploadPrepareWorker;
-  const worker = createWorker();
-  const client = new UploadPrepareWorkerClient(worker);
+  const client = await createInitializedUploadPrepareWorker(createWorker, {
+    wasmScriptUrl: options.wasmScriptUrl ?? DEFAULT_UPLOAD_WASM_SCRIPT_URL,
+    wasmBinaryUrl: options.wasmBinaryUrl ?? DEFAULT_UPLOAD_WASM_BINARY_URL,
+    credential,
+    fileName: originalFileName,
+    fileSize: file.size,
+    segmentCode: resolvedSegmentCode,
+    maxWireBlockBytes,
+  });
 
   const uploads: UploadMap = new Map();
   let bytesFed = 0;
@@ -700,16 +772,6 @@ async function prepareUploadStreamingInWorker(
   };
 
   try {
-    await client.init({
-      wasmScriptUrl: options.wasmScriptUrl ?? DEFAULT_UPLOAD_WASM_SCRIPT_URL,
-      wasmBinaryUrl: options.wasmBinaryUrl ?? DEFAULT_UPLOAD_WASM_BINARY_URL,
-      credential,
-      fileName: originalFileName,
-      fileSize: file.size,
-      segmentCode: resolvedSegmentCode,
-      maxWireBlockBytes,
-    });
-
     for await (const chunk of readFileByGcmSegments(file, resolvedSegmentCode)) {
       for (
         let offset = 0;

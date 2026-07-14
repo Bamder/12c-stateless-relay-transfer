@@ -1,5 +1,6 @@
 import type { FetchUploadClient } from '../transport/fetch-upload-client.js';
 import type { RelayEndpoint } from '../types.js';
+import type { ByteTransferProgressListener } from '../transport/byte-transfer-progress.js';
 import { backoffDelayMs, sleep, type RetryPolicy } from './retry-policy.js';
 
 export interface PutRetryPolicy extends RetryPolicy {
@@ -67,6 +68,9 @@ export async function putWithRetry(
   endpoint: RelayEndpoint,
   blob: Uint8Array,
   policy: PutRetryPolicy,
+  options: {
+    onUploadProgress?: ByteTransferProgressListener;
+  } = {},
 ): Promise<void> {
   if (policy.maxAttempts <= 0) {
     throw new Error('maxAttempts must be greater than zero');
@@ -80,7 +84,9 @@ export async function putWithRetry(
   while (true) {
     attempt++;
     try {
-      await uploadClient.put(endpoint, blob);
+      await uploadClient.put(endpoint, blob, {
+        onUploadProgress: options.onUploadProgress,
+      });
       return;
     } catch (error) {
       lastError = error;
