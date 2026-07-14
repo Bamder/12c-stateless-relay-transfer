@@ -1,6 +1,6 @@
 import type { RelayEndpoint } from '../types.js';
 import { lookupRelay, isResolvableRegistryRecord, TokenPlacementExpiredError, type RegistryClient } from './registry-client.js';
-import { endpointFromRegistryRecord } from './endpoints-from-registry.js';
+import { downloadEndpointFromRegistryRecord } from './endpoints-from-registry.js';
 
 export type RelayEndpointMap = Map<string, RelayEndpoint>;
 
@@ -60,7 +60,7 @@ export class RegistryRelayRouter implements RelayRouter {
 
   async resolve(token: string): Promise<RelayEndpoint> {
     const record = await lookupRelay(this.registry, token);
-    return endpointFromRegistryRecord(token, record, this.defaultHeaders);
+    return downloadEndpointFromRegistryRecord(token, record, this.defaultHeaders);
   }
 
   async resolveMany(tokens: readonly string[]): Promise<RelayEndpointMap> {
@@ -82,7 +82,7 @@ export class RegistryRelayRouter implements RelayRouter {
       }
       endpoints.set(
         token,
-        endpointFromRegistryRecord(token, record, this.defaultHeaders),
+        downloadEndpointFromRegistryRecord(token, record, this.defaultHeaders),
       );
     }
 

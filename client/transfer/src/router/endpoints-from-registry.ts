@@ -22,6 +22,10 @@ export interface ReplicaUploadTarget {
   endpoint: RelayEndpoint;
 }
 
+/**
+ * Upload primary PUT endpoint: always the role=primary target.
+ * Replica PUT targets come from replicaTargetsFromRegistryMap, not fallbacks.
+ */
 export function endpointFromRegistryRecord(
   token: string,
   record: RelayRegistryRecord,
@@ -33,14 +37,28 @@ export function endpointFromRegistryRecord(
     throw new Error(`registry record for ${token} missing primary target`);
   }
 
-  const replicas = record.targets.filter(
-    (target): target is RelayTargetRecord => target.role === 'replica',
-  );
+  return endpointFromBase(primary.relayBaseUrl, token, mergedHeaders);
+}
 
+/**
+ * Download GET endpoint: follow Registry target order (read steering).
+ * First live target is preferred; remaining targets are failover fallbacks.
+ * Registry orders by ascending storage_rate so a light replica can beat a busy primary.
+ */
+export function downloadEndpointFromRegistryRecord(
+  token: string,
+  record: RelayRegistryRecord,
+  headers?: Record<string, string>,
+): RelayEndpoint {
+  const mergedHeaders = { ...record.headers, ...headers };
+  if (record.targets.length === 0) {
+    throw new Error(`registry record for ${token} has no download targets`);
+  }
+
+  const [preferred, ...rest] = record.targets;
   return {
-    ...endpointFromBase(primary.relayBaseUrl, token, mergedHeaders),
-    // 下载 failover 用；上传走 routePlan.replicas，条带 primary 仅 PUT 主目标。
-    fallbacks: replicas.map((target) =>
+    ...endpointFromBase(preferred.relayBaseUrl, token, mergedHeaders),
+    fallbacks: rest.map((target) =>
       endpointFromBase(target.relayBaseUrl, token, mergedHeaders),
     ),
   };

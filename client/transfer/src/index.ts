@@ -122,6 +122,7 @@ export {
   downloadAdaptive,
   receiveFromUploadMap,
   DEFAULT_BROWSER_RECEIVE_MEMORY_BUDGET_BYTES,
+  probeBrowserReceiveMemoryBudgetBytes,
   resolveBrowserReceivePrefetchCount,
   resolveReceivePrefetchCount,
   type DownloadAdaptiveResult,

@@ -1,3 +1,9 @@
+"""TTL-aware placement: decide how long tokens may live, then assign relays.
+
+When relays cannot honor the requested TTL, this module degrades the grant
+and/or shrinks topology until a feasible subset exists.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -16,6 +22,7 @@ DEFAULT_BLOCK_SWEEP_INTERVAL_SECONDS = 3600
 
 
 class InsufficientRelayCapacityError(RuntimeError):
+    """Raised when no healthy relay subset can support a placement grant."""
     pass
 
 
@@ -24,11 +31,15 @@ def effective_cap_seconds(
     *,
     clock_skew_seconds: int,
 ) -> int:
-    """Registry 可承诺的最长 TTL；sweep 只会在块到期后删除，故仅扣除时钟余量。"""
+    """Longest TTL Registry may promise for a relay given its block max age.
+
+    Subtracts clock-skew allowance from the heartbeat-reported blockMaxAge.
+    """
     return max(1, block_max_age_seconds - clock_skew_seconds)
 
 
 def relay_effective_cap(relay: HealthyRelay, policy: PlacementPolicy) -> int:
+    """Effective TTL cap for one healthy relay under the current policy."""
     return effective_cap_seconds(
         relay.block_max_age_seconds,
         clock_skew_seconds=policy.clock_skew_seconds,
@@ -40,6 +51,7 @@ def count_eligible(
     threshold: int,
     policy: PlacementPolicy,
 ) -> int:
+    """Count relays whose effective TTL cap is at least ``threshold``."""
     return sum(
         1 for relay in pool if relay_effective_cap(relay, policy) >= threshold
     )
@@ -50,6 +62,10 @@ def max_threshold_for_count(
     need: int,
     policy: PlacementPolicy,
 ) -> int | None:
+    """Highest TTL threshold that still leaves at least ``need`` eligible relays.
+
+    Tries distinct effective caps from high to low; returns None if none work.
+    """
     caps = sorted(
         {relay_effective_cap(relay, policy) for relay in pool},
         reverse=True,
@@ -66,6 +82,11 @@ def ideal_relay_count(
     healthy_count: int,
     policy: PlacementPolicy,
 ) -> int:
+    """Preferred number of relays for the upload given current sizing rules.
+
+    Computed as S×(1+R) from stripe–replica sizing, then clamped to
+    [1, block_count × max_replicas_per_block].
+    """
     choice = choose_stripe_replica(
         block_count=block_count,
         healthy_count=healthy_count,
@@ -85,6 +106,13 @@ def find_granted_ttl_with_topology(
     block_count: int,
     policy: PlacementPolicy,
 ) -> int:
+    """TTL degrade search: find the best grantable TTL when the request is too high.
+
+    Starts from the ideal relay count, requires enough relays above a floor
+    derived from the cluster max cap and ttl_degrade_step_divisor, then picks
+    the highest joint threshold for that count. Shrinks the relay count until
+    a feasible grant appears.
+    """
     if not pool:
         raise InsufficientRelayCapacityError("no healthy relay available")
 
@@ -117,6 +145,8 @@ def find_granted_ttl_with_topology(
 
 @dataclass(frozen=True)
 class PlacementResolution:
+    """Granted TTL, degrade status, and the resulting token placements."""
+
     granted_ttl_seconds: int
     requested_ttl_seconds: int
     degraded: bool
@@ -133,6 +163,13 @@ def resolve_placement_with_ttl(
     requested_ttl: int,
     policy: PlacementPolicy,
 ) -> PlacementResolution:
+    """TTL-aware placement: grant a TTL, filter relays, then assign tokens.
+
+    If enough relays already support the requested TTL, grant it as-is.
+    Otherwise run TTL degrade search for a lower grantable value. Placements
+    are then planned on the filtered pool. Marked degraded when the grant is
+    shorter than requested or fewer relays are used than the ideal count.
+    """
     if not healthy:
         raise InsufficientRelayCapacityError("no healthy relay available")
 

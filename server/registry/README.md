@@ -65,12 +65,14 @@ registry_server/
   "routes": [{
     "token": "...",
     "targets": [
-      { "role": "primary", "relayId": "relay-a", "relayBaseUrl": "http://..." },
-      { "role": "replica", "relayId": "relay-c", "relayBaseUrl": "http://..." }
+      { "role": "replica", "relayId": "relay-c", "relayBaseUrl": "http://..." },
+      { "role": "primary", "relayId": "relay-a", "relayBaseUrl": "http://..." }
     ]
   }]
 }
 ```
+
+`targets` 按单 token **读导流**排序：健康且未过期的持有者中，`storage_rate` 升序（最闲优先）；同负载时 primary 优先。客户端应把首个 target 作为首选 GET，其余作为 failover。仍要求至少有一个 live primary，否则该 token 不可解析。
 
 ### 上传路由
 

@@ -3,6 +3,7 @@ import { backoffDelayMs, sleep } from '../resilience/retry-policy.js';
 import { TokenPlacementExpiredError } from '../router/registry-client.js';
 import type { RelayEndpoint } from '../types.js';
 import type { RelayRouter } from '../router/relay-router.js';
+import { InFlightByteWindowMeter } from './byte-transfer-progress.js';
 import type { ReceiveTransport } from './receive-transport.js';
 
 interface PendingGet {
@@ -18,6 +19,13 @@ export interface FetchReceiveTransportOptions {
   resolveRetryDelayMs?: number;
   /** Relay GET 瞬态失败（404 等）重试次数。 */
   getMaxAttempts?: number;
+  /**
+   * Known wire-block size hint for GET progress when Content-Length is absent.
+   * Call {@link FetchReceiveTransport.setExpectedWireBlockBytes} after SMB parse.
+   */
+  expectedWireBlockBytes?: number;
+  /** Force legacy response.arrayBuffer() instead of streaming body read. */
+  forceArrayBufferFallback?: boolean;
 }
 
 const DEFAULT_RESOLVE_MAX_ATTEMPTS = 20;
@@ -30,6 +38,13 @@ const WAITING_ACTIVITY_ATTEMPT_STEP = 5;
 export type ReceiveTransportActivity =
   | { kind: 'resolving'; tokenCount: number }
   | { kind: 'download_started'; token: string }
+  | {
+      kind: 'download_byte_progress';
+      /** Concurrent in-flight GET window: bytes received so far. */
+      windowBytesTransferred: number;
+      /** Concurrent in-flight GET window: expected sum of body sizes. */
+      windowBytesTotal: number;
+    }
   | {
       kind: 'waiting';
       token: string;
@@ -65,6 +80,9 @@ export class FetchReceiveTransport implements ReceiveTransport {
   private readonly resolveMaxAttempts: number;
   private readonly resolveRetryDelayMs: number;
   private readonly getMaxAttempts: number;
+  private readonly forceArrayBufferFallback: boolean;
+  private expectedWireBlockBytes: number | undefined;
+  private readonly downloadWindowMeter = new InFlightByteWindowMeter();
   private activityListener: ((activity: ReceiveTransportActivity) => void) | null =
     null;
   private readonly lastWaitingActivity = new Map<
@@ -83,6 +101,13 @@ export class FetchReceiveTransport implements ReceiveTransport {
     this.resolveRetryDelayMs =
       options.resolveRetryDelayMs ?? DEFAULT_RESOLVE_RETRY_DELAY_MS;
     this.getMaxAttempts = options.getMaxAttempts ?? DEFAULT_GET_MAX_ATTEMPTS;
+    this.forceArrayBufferFallback = options.forceArrayBufferFallback === true;
+    this.expectedWireBlockBytes =
+      options.expectedWireBlockBytes !== undefined &&
+      Number.isFinite(options.expectedWireBlockBytes) &&
+      options.expectedWireBlockBytes > 0
+        ? Math.trunc(options.expectedWireBlockBytes)
+        : undefined;
   }
 
   setActivityListener(
@@ -91,8 +116,32 @@ export class FetchReceiveTransport implements ReceiveTransport {
     this.activityListener = listener;
   }
 
-  startConcurrentGet(tokens: string[]): void {
-    void this.ensureTokensStarted(tokens);
+  /** Hint for streaming GET progress when responses omit Content-Length. */
+  setExpectedWireBlockBytes(bytes: number | undefined): void {
+    this.expectedWireBlockBytes =
+      bytes !== undefined && Number.isFinite(bytes) && bytes > 0
+        ? Math.trunc(bytes)
+        : undefined;
+  }
+
+  getByteWindowSnapshot(): {
+    windowBytesTransferred: number;
+    windowBytesTotal: number;
+  } {
+    return this.downloadWindowMeter.snapshot();
+  }
+
+  startConcurrentGet(tokens: string[]): Promise<void> {
+    return this.ensureTokensStarted(tokens);
+  }
+
+  /** Tokens with an in-flight Registry resolve and/or Relay GET. */
+  inFlightCount(): number {
+    const tokens = new Set<string>([
+      ...this.pending.keys(),
+      ...this.inflight.keys(),
+    ]);
+    return tokens.size;
   }
 
   cancelPending(tokens: string[]): void {
@@ -244,13 +293,37 @@ export class FetchReceiveTransport implements ReceiveTransport {
     const abort = new AbortController();
     this.emitActivity({ kind: 'download_started', token });
 
+    this.downloadWindowMeter.begin(token, this.expectedWireBlockBytes ?? 0);
+    this.emitDownloadByteProgress();
+
     const promise = getWithFallbacks(token, endpoint, {
       fetchFn: this.fetchFn,
       rejectNonOk: this.rejectNonOk,
       signal: abort.signal,
+      expectedBytesTotal: this.expectedWireBlockBytes,
+      forceArrayBufferFallback: this.forceArrayBufferFallback,
+      onDownloadProgress: (progress) => {
+        if (progress.bytesTotal !== undefined && progress.bytesTotal > 0) {
+          this.downloadWindowMeter.setTotal(token, progress.bytesTotal);
+        }
+        this.downloadWindowMeter.setTransferred(token, progress.bytesTransferred);
+        this.emitDownloadByteProgress();
+      },
+    }).finally(() => {
+      this.downloadWindowMeter.end(token);
+      this.emitDownloadByteProgress();
     });
 
     return { promise, abort };
+  }
+
+  private emitDownloadByteProgress(): void {
+    const window = this.downloadWindowMeter.snapshot();
+    this.emitActivity({
+      kind: 'download_byte_progress',
+      windowBytesTransferred: window.windowBytesTransferred,
+      windowBytesTotal: window.windowBytesTotal,
+    });
   }
 
   private maybeEmitWaiting(

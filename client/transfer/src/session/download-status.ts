@@ -14,12 +14,25 @@ export type DownloadStatusUpdate =
       total: number;
     }
   /** 含 SMB 元数据的线区块正在传输（与其它块并行，非单独优先） */
-  | { phase: 'awaiting_metadata_block' }
+  | { phase: 'awaiting_metadata_block'; prefetchCount?: number }
   | {
       phase: 'waiting_metadata_block';
       reason: 'registry' | 'relay';
       attempt: number;
     }
   | { phase: 'parsing_metadata' }
-  | { phase: 'downloading'; completed: number; total: number }
+  | {
+      phase: 'downloading';
+      completed: number;
+      total: number;
+      /** Concurrent resolve + GET lanes currently in flight. */
+      inFlight?: number;
+      /**
+       * Whole-download wire progress (monotonic after SMB).
+       * ≈ completed×wireBlockSize + in-flight streaming bytes.
+       */
+      transferBytesTransferred?: number;
+      /** Expected total wire bytes ≈ total×wireBlockSize (stable after SMB). */
+      transferBytesTotal?: number;
+    }
   | { phase: 'decrypting'; total: number };

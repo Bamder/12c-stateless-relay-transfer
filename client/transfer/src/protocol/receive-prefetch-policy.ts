@@ -1,11 +1,22 @@
 import { DEFAULT_INITIAL_TOKENS } from '../types.js';
-import { DEFAULT_RELAY_MAX_BODY_BYTES } from '../wire-block-policy.js';
+import {
+  DEFAULT_RELAY_MAX_BODY_BYTES,
+  isLikelyMobileBrowser,
+} from '../wire-block-policy.js';
 
 /**
- * 浏览器接收侧在途 wire 块的目标内存预算（仅计已发出 GET、尚未喂给解密的块）。
- * 与 12C Π_Recv_Adaptive 的 initial_tokens = m 对应：m ≈ budget / wireBlockSize。
+ * Fallback in-flight wire-block budget when device memory cannot be probed.
+ * Only counts issued GETs not yet fed into decrypt.
  */
 export const DEFAULT_BROWSER_RECEIVE_MEMORY_BUDGET_BYTES = 96 * 1024 * 1024;
+
+/** Conservative fallback when UA looks mobile and deviceMemory is missing. */
+export const MOBILE_BROWSER_RECEIVE_MEMORY_BUDGET_BYTES = 48 * 1024 * 1024;
+
+export const MIN_BROWSER_RECEIVE_MEMORY_BUDGET_BYTES = 32 * 1024 * 1024;
+export const MAX_BROWSER_RECEIVE_MEMORY_BUDGET_BYTES = 192 * 1024 * 1024;
+/** Mobile hard cap even on high deviceMemory readings. */
+export const MAX_MOBILE_BROWSER_RECEIVE_MEMORY_BUDGET_BYTES = 64 * 1024 * 1024;
 
 export const MIN_BROWSER_RECEIVE_PREFETCH = 2;
 export const MAX_BROWSER_RECEIVE_PREFETCH = 64;
@@ -14,17 +25,79 @@ function isBrowserRuntime(): boolean {
   return typeof globalThis !== 'undefined' && 'window' in globalThis;
 }
 
+function readNavigatorDeviceMemoryGiB(): number | undefined {
+  if (typeof navigator === 'undefined') {
+    return undefined;
+  }
+  const value = (navigator as Navigator & { deviceMemory?: number }).deviceMemory;
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+    return undefined;
+  }
+  return value;
+}
+
+export interface ProbeReceiveMemoryBudgetOptions {
+  /** Override navigator.deviceMemory (GiB). */
+  deviceMemoryGiB?: number;
+  /** Override mobile UA detection. */
+  isMobile?: boolean;
+}
+
+/**
+ * Probe a receive-side memory budget from approximate device RAM.
+ *
+ * Uses navigator.deviceMemory when present (Chromium). Otherwise falls back to
+ * 96 MiB desktop / 48 MiB mobile. Mobile is additionally capped at 64 MiB.
+ */
+export function probeBrowserReceiveMemoryBudgetBytes(
+  options: ProbeReceiveMemoryBudgetOptions = {},
+): number {
+  const mobile =
+    options.isMobile === true ||
+    (options.isMobile !== false && isLikelyMobileBrowser());
+  const deviceMemoryGiB =
+    options.deviceMemoryGiB ?? readNavigatorDeviceMemoryGiB();
+
+  let budget: number;
+  if (deviceMemoryGiB === undefined) {
+    budget = mobile
+      ? MOBILE_BROWSER_RECEIVE_MEMORY_BUDGET_BYTES
+      : DEFAULT_BROWSER_RECEIVE_MEMORY_BUDGET_BYTES;
+  } else if (deviceMemoryGiB <= 1) {
+    budget = 32 * 1024 * 1024;
+  } else if (deviceMemoryGiB <= 2) {
+    budget = 48 * 1024 * 1024;
+  } else if (deviceMemoryGiB <= 4) {
+    budget = 96 * 1024 * 1024;
+  } else if (deviceMemoryGiB <= 8) {
+    budget = 128 * 1024 * 1024;
+  } else {
+    budget = 192 * 1024 * 1024;
+  }
+
+  if (mobile) {
+    budget = Math.min(budget, MAX_MOBILE_BROWSER_RECEIVE_MEMORY_BUDGET_BYTES);
+  }
+
+  return Math.max(
+    MIN_BROWSER_RECEIVE_MEMORY_BUDGET_BYTES,
+    Math.min(MAX_BROWSER_RECEIVE_MEMORY_BUDGET_BYTES, budget),
+  );
+}
+
 export interface ResolveReceivePrefetchCountOptions {
-  /** 显式 m（覆盖预算推导） */
+  /** Explicit m (skips budget derivation). */
   explicit?: number;
   memoryBudgetBytes?: number;
   min?: number;
   max?: number;
+  deviceMemoryGiB?: number;
+  isMobile?: boolean;
 }
 
 /**
- * 由 wire 块大小与内存预算推导并发预取数 m。
- * Token[0] 混在 [0, m) 中与 Token[1..m-1] 同时发出，不单独暴露元数据块。
+ * Derive concurrent prefetch count m from wire-block size and a memory budget.
+ * Token[0] shares the [0, m) window with Token[1..m-1].
  */
 export function resolveBrowserReceivePrefetchCount(
   wireBlockBytes: number,
@@ -35,7 +108,11 @@ export function resolveBrowserReceivePrefetchCount(
   }
 
   const budget =
-    options.memoryBudgetBytes ?? DEFAULT_BROWSER_RECEIVE_MEMORY_BUDGET_BYTES;
+    options.memoryBudgetBytes ??
+    probeBrowserReceiveMemoryBudgetBytes({
+      deviceMemoryGiB: options.deviceMemoryGiB,
+      isMobile: options.isMobile,
+    });
   const min = options.min ?? MIN_BROWSER_RECEIVE_PREFETCH;
   const max = options.max ?? MAX_BROWSER_RECEIVE_PREFETCH;
 
@@ -50,8 +127,9 @@ export function resolveBrowserReceivePrefetchCount(
 }
 
 /**
- * Π_Recv_Adaptive 的 m：浏览器按预算推导；原生/Worker 默认 64。
- * 解析 SMB 前用 relayMaxBodyBytes 估计 wire 块；解析后用实测 wireBlockSize 收紧。
+ * Π_Recv_Adaptive m: browsers probe a budget; native/Worker default to 64.
+ * Before SMB parse, estimate wire size with relayMaxBodyBytes; after parse,
+ * retighten with measured wireBlockSize.
  */
 export function resolveReceivePrefetchCount(
   wireBlockBytes: number,

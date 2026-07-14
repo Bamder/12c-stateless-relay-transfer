@@ -19,6 +19,10 @@ from ..scheduling.placement_ttl import (
     InsufficientRelayCapacityError,
     resolve_placement_with_ttl,
 )
+from ..scheduling.read_steering import (
+    DownloadTargetCandidate,
+    order_download_targets_by_load,
+)
 
 
 def utc_now() -> datetime:
@@ -1297,29 +1301,33 @@ class RegistryRepository:
         healthy_ids = set(healthy_rates)
 
         live_targets: list[RelayTarget] = []
+        candidates: list[DownloadTargetCandidate] = []
         for item in placements:
             if item.relay_id not in healthy_ids:
                 continue
             if not self.is_placement_live(item):
                 continue
-            live_targets.append(
-                RelayTarget(
+            candidates.append(
+                DownloadTargetCandidate(
                     role=item.role,
                     relay_id=item.relay_id,
                     relay_base_url=item.relay_base_url,
+                    storage_rate=healthy_rates.get(item.relay_id, 1.0),
                 ),
             )
 
-        if not any(target.role == "primary" for target in live_targets):
+        if not any(candidate.role == "primary" for candidate in candidates):
             return None
 
-        live_targets.sort(
-            key=lambda target: (
-                0 if target.role == "primary" else 1,
-                healthy_rates.get(target.relay_id, 1.0),
-                target.relay_id,
-            ),
-        )
+        steered = order_download_targets_by_load(candidates)
+        live_targets = [
+            RelayTarget(
+                role=item.role,
+                relay_id=item.relay_id,
+                relay_base_url=item.relay_base_url,
+            )
+            for item in steered
+        ]
         return TokenReserveResult(
             token=token,
             targets=tuple(live_targets),
