@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+import hashlib
+import json
 from pathlib import Path
+import uuid
 
 import aiosqlite
 
@@ -15,6 +18,10 @@ from ..scheduling.placement_ttl import (
     DEFAULT_BLOCK_SWEEP_INTERVAL_SECONDS,
     InsufficientRelayCapacityError,
     resolve_placement_with_ttl,
+)
+from ..scheduling.read_steering import (
+    DownloadTargetCandidate,
+    order_download_targets_by_load,
 )
 
 
@@ -59,7 +66,8 @@ class LockTokensOutcome:
 class TokenPlacement:
     token: str
     relay_id: str
-    relay_base_url: str
+    # Public URL recorded at reserve time (audit snapshot; not used for resolve).
+    registered_relay_base_url: str
     role: str
     block_hash: str
     expiry_at: str
@@ -120,6 +128,12 @@ ADMIN_DB_TABLES: tuple[str, ...] = (
     "token_relay_placements",
     "relay_registry_keys",
     "relay_block_auth_keys",
+    "relay_heartbeat_events",
+    "token_reservation_batches",
+    "token_reservation_items",
+    "token_resolution_events",
+    "replica_abandon_events",
+    "registry_admin_events",
 )
 
 ADMIN_DB_PRIMARY_KEYS: dict[str, tuple[str, ...]] = {
@@ -129,6 +143,12 @@ ADMIN_DB_PRIMARY_KEYS: dict[str, tuple[str, ...]] = {
     "token_relay_placements": ("token", "relay_id"),
     "relay_registry_keys": ("relay_id", "key_id"),
     "relay_block_auth_keys": ("relay_id", "key_id"),
+    "relay_heartbeat_events": ("event_id",),
+    "token_reservation_batches": ("batch_id",),
+    "token_reservation_items": ("batch_id", "token_hash"),
+    "token_resolution_events": ("event_id",),
+    "replica_abandon_events": ("event_id",),
+    "registry_admin_events": ("event_id",),
 }
 
 ADMIN_DB_ROW_LIMIT = 500
@@ -172,6 +192,14 @@ class TokenOccupiedError(Exception):
 _PATCH_UNSET = object()
 
 
+def _hash_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def _token_prefix(token: str) -> str:
+    return token[:8]
+
+
 class RegistryRepository:
     def __init__(self, database_path: Path, config: RegistryServerConfig) -> None:
         self._database_path = database_path
@@ -185,7 +213,7 @@ class RegistryRepository:
                 CREATE TABLE IF NOT EXISTS token_relay_placements (
                     token TEXT NOT NULL,
                     relay_id TEXT NOT NULL,
-                    relay_base_url TEXT NOT NULL,
+                    registered_relay_base_url TEXT NOT NULL,
                     role TEXT NOT NULL,
                     block_hash TEXT NOT NULL,
                     expiry_at TEXT NOT NULL,
@@ -194,6 +222,7 @@ class RegistryRepository:
                 )
                 """,
             )
+            await self._migrate_token_placement_registered_url_column(db)
             await db.execute(
                 """
                 CREATE TABLE IF NOT EXISTS relay_states (
@@ -258,10 +287,115 @@ class RegistryRepository:
                 )
                 """,
             )
+            # 运维审计表只保存状态、统计和哈希摘要，不保存文件内容。
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS relay_heartbeat_events (
+                    event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    relay_id TEXT NOT NULL,
+                    relay_base_url TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    stored_blocks INTEGER NOT NULL,
+                    max_blocks INTEGER NOT NULL,
+                    storage_rate REAL NOT NULL,
+                    reported_at TEXT NOT NULL
+                )
+                """,
+            )
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS token_reservation_batches (
+                    batch_id TEXT PRIMARY KEY,
+                    token_count INTEGER NOT NULL,
+                    ttl_seconds INTEGER NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+                """,
+            )
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS token_reservation_items (
+                    batch_id TEXT NOT NULL,
+                    token_hash TEXT NOT NULL,
+                    token_prefix TEXT NOT NULL,
+                    block_hash_prefix TEXT NOT NULL,
+                    target_count INTEGER NOT NULL,
+                    created_at TEXT NOT NULL,
+                    PRIMARY KEY (batch_id, token_hash)
+                )
+                """,
+            )
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS token_resolution_events (
+                    event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    token_count INTEGER NOT NULL,
+                    resolved_count INTEGER NOT NULL,
+                    requested_at TEXT NOT NULL
+                )
+                """,
+            )
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS replica_abandon_events (
+                    event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    token_hash TEXT NOT NULL,
+                    token_prefix TEXT NOT NULL,
+                    relay_id TEXT NOT NULL,
+                    removed INTEGER NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+                """,
+            )
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS registry_admin_events (
+                    event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    action TEXT NOT NULL,
+                    target_table TEXT,
+                    target_key TEXT,
+                    created_at TEXT NOT NULL
+                )
+                """,
+            )
+            await db.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_relay_heartbeat_events_relay_time
+                ON relay_heartbeat_events(relay_id, reported_at)
+                """,
+            )
+            await db.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_block_resolution_events_time
+                ON token_resolution_events(requested_at)
+                """,
+            )
             await db.commit()
 
         await self._seed_allowlist()
         await self.purge_expired_tokens()
+
+    async def _migrate_token_placement_registered_url_column(
+        self,
+        db: aiosqlite.Connection,
+    ) -> None:
+        """Rename placement URL snapshot column to registered_relay_base_url."""
+        cursor = await db.execute("PRAGMA table_info(token_relay_placements)")
+        rows = await cursor.fetchall()
+        if not rows:
+            return
+        columns = {row[1] for row in rows}
+        if "registered_relay_base_url" in columns:
+            return
+        if "relay_base_url" not in columns:
+            return
+        await db.execute(
+            """
+            ALTER TABLE token_relay_placements
+            RENAME COLUMN relay_base_url TO registered_relay_base_url
+            """,
+        )
+        await db.commit()
 
     async def _migrate_registration_requests_schema(self, db: aiosqlite.Connection) -> None:
         cursor = await db.execute("PRAGMA table_info(relay_registration_requests)")
@@ -736,6 +870,114 @@ class RegistryRepository:
             )
         return overviews
 
+    async def record_heartbeat_event(
+        self,
+        *,
+        relay_id: str,
+        relay_base_url: str,
+        status: str,
+        stored_blocks: int,
+        max_blocks: int,
+        storage_rate: float,
+    ) -> None:
+        async with aiosqlite.connect(self._database_path) as db:
+            await db.execute(
+                """
+                INSERT INTO relay_heartbeat_events (
+                    relay_id, relay_base_url, status, stored_blocks,
+                    max_blocks, storage_rate, reported_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    relay_id,
+                    relay_base_url.rstrip("/"),
+                    status,
+                    stored_blocks,
+                    max_blocks,
+                    storage_rate,
+                    utc_now_iso(),
+                ),
+            )
+            await db.commit()
+
+    async def record_token_reservation_batch(
+        self,
+        *,
+        entries: list[tuple[str, str]],
+        results: list[TokenReserveResult],
+        ttl_seconds: int,
+    ) -> None:
+        batch_id = uuid.uuid4().hex
+        now = utc_now_iso()
+        target_counts = {item.token: len(item.targets) for item in results}
+        async with aiosqlite.connect(self._database_path) as db:
+            await db.execute(
+                """
+                INSERT INTO token_reservation_batches (
+                    batch_id, token_count, ttl_seconds, created_at
+                ) VALUES (?, ?, ?, ?)
+                """,
+                (batch_id, len(entries), ttl_seconds, now),
+            )
+            for token, block_hash in entries:
+                await db.execute(
+                    """
+                    INSERT INTO token_reservation_items (
+                        batch_id, token_hash, token_prefix, block_hash_prefix,
+                        target_count, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        batch_id,
+                        _hash_token(token),
+                        _token_prefix(token),
+                        block_hash[:12],
+                        target_counts.get(token, 0),
+                        now,
+                    ),
+                )
+            await db.commit()
+
+    async def record_token_resolution_event(
+        self,
+        *,
+        token_count: int,
+        resolved_count: int,
+    ) -> None:
+        async with aiosqlite.connect(self._database_path) as db:
+            await db.execute(
+                """
+                INSERT INTO token_resolution_events (
+                    token_count, resolved_count, requested_at
+                ) VALUES (?, ?, ?)
+                """,
+                (token_count, resolved_count, utc_now_iso()),
+            )
+            await db.commit()
+
+    async def record_admin_event(
+        self,
+        *,
+        action: str,
+        target_table: str | None = None,
+        keys: dict[str, object] | None = None,
+    ) -> None:
+        target_key = (
+            json.dumps(keys, ensure_ascii=False, sort_keys=True, default=str)
+            if keys is not None
+            else None
+        )
+        async with aiosqlite.connect(self._database_path) as db:
+            await db.execute(
+                """
+                INSERT INTO registry_admin_events (
+                    action, target_table, target_key, created_at
+                ) VALUES (?, ?, ?, ?)
+                """,
+                (action, target_table, target_key, utc_now_iso()),
+            )
+            await db.commit()
+
     def _mask_admin_row(self, table: str, row: dict[str, object]) -> dict[str, object]:
         masked = dict(row)
         if table == "relay_registry_keys" and masked.get("key_secret_hash"):
@@ -812,15 +1054,45 @@ class RegistryRepository:
             await db.commit()
             return cursor.rowcount
 
+    async def get_canonical_relay_base_url(self, relay_id: str) -> str | None:
+        """Current public URL for a relay: allowlist first, then relay_states."""
+        record = await self.get_allowlist_record(relay_id)
+        if (
+            record is not None
+            and record.enabled
+            and record.relay_base_url is not None
+            and record.relay_base_url.strip()
+        ):
+            return record.relay_base_url.rstrip("/")
+
+        async with aiosqlite.connect(self._database_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                """
+                SELECT relay_base_url
+                FROM relay_states
+                WHERE relay_id = ?
+                """,
+                (relay_id,),
+            )
+            row = await cursor.fetchone()
+            if row is None:
+                return None
+            value = str(row["relay_base_url"]).strip().rstrip("/")
+            return value or None
+
     async def list_healthy_relays(self) -> list[HealthyRelay]:
         stale_before = (
             utc_now() - timedelta(seconds=self._config.relay_heartbeat_stale_seconds)
         ).isoformat()
         async with aiosqlite.connect(self._database_path) as db:
             db.row_factory = aiosqlite.Row
+            # Prefer allowlist URL (mutable Public URL) over heartbeat snapshot.
             cursor = await db.execute(
                 """
-                SELECT rs.relay_id, rs.relay_base_url, rs.storage_rate,
+                SELECT rs.relay_id,
+                       COALESCE(al.relay_base_url, rs.relay_base_url) AS relay_base_url,
+                       rs.storage_rate,
                        rs.block_max_age_seconds, rs.block_sweep_interval_seconds
                 FROM relay_states rs
                 INNER JOIN registry_allowlist al ON al.relay_id = rs.relay_id
@@ -866,7 +1138,7 @@ class RegistryRepository:
         return TokenPlacement(
             token=str(row["token"]),
             relay_id=str(row["relay_id"]),
-            relay_base_url=str(row["relay_base_url"]).rstrip("/"),
+            registered_relay_base_url=str(row["registered_relay_base_url"]).rstrip("/"),
             role=str(row["role"]),
             block_hash=str(row["block_hash"]),
             expiry_at=str(row["expiry_at"]),
@@ -877,7 +1149,8 @@ class RegistryRepository:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute(
                 """
-                SELECT token, relay_id, relay_base_url, role, block_hash, expiry_at
+                SELECT token, relay_id, registered_relay_base_url,
+                       role, block_hash, expiry_at
                 FROM token_relay_placements
                 WHERE token = ?
                 ORDER BY CASE role WHEN 'primary' THEN 0 ELSE 1 END, relay_id ASC
@@ -896,7 +1169,8 @@ class RegistryRepository:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute(
                 """
-                SELECT token, relay_id, relay_base_url, role, block_hash, expiry_at
+                SELECT token, relay_id, registered_relay_base_url,
+                       role, block_hash, expiry_at
                 FROM token_relay_placements
                 WHERE token = ? AND relay_id = ?
                 """,
@@ -917,6 +1191,14 @@ class RegistryRepository:
     def is_placement_live(self, placement: TokenPlacement) -> bool:
         return not self._is_expired(placement.expiry_at)
 
+    async def classify_token_resolve_status(self, token: str) -> str:
+        placements = await self.get_token_placements(token)
+        if not placements:
+            return "unavailable"
+        if not any(self.is_placement_live(item) for item in placements):
+            return "expired"
+        return "ready"
+
     async def update_token_block_hash(self, token: str, block_hash: str) -> None:
         now = utc_now_iso()
         async with aiosqlite.connect(self._database_path) as db:
@@ -930,22 +1212,31 @@ class RegistryRepository:
             )
             await db.commit()
 
-    def _placements_to_reserve_result(
+    async def _placements_to_reserve_result(
         self,
         token: str,
         placements: list[TokenPlacement],
+        *,
+        live_urls: dict[str, str] | None = None,
     ) -> TokenReserveResult:
-        return TokenReserveResult(
-            token=token,
-            targets=tuple(
+        """Build reserve/resolve targets; prefer live URLs keyed by relay_id."""
+        targets: list[RelayTarget] = []
+        for item in placements:
+            url = None
+            if live_urls is not None:
+                url = live_urls.get(item.relay_id)
+            if url is None:
+                url = await self.get_canonical_relay_base_url(item.relay_id)
+            if url is None:
+                url = item.registered_relay_base_url
+            targets.append(
                 RelayTarget(
                     role=item.role,
                     relay_id=item.relay_id,
-                    relay_base_url=item.relay_base_url,
-                )
-                for item in placements
-            ),
-        )
+                    relay_base_url=url,
+                ),
+            )
+        return TokenReserveResult(token=token, targets=tuple(targets))
 
     async def lock_tokens_with_block_hashes(
         self,
@@ -1016,11 +1307,11 @@ class RegistryRepository:
                 await db.execute(
                     """
                     INSERT INTO token_relay_placements (
-                        token, relay_id, relay_base_url, role,
+                        token, relay_id, registered_relay_base_url, role,
                         block_hash, expiry_at, updated_at
                     ) VALUES (?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(token, relay_id) DO UPDATE SET
-                        relay_base_url = excluded.relay_base_url,
+                        registered_relay_base_url = excluded.registered_relay_base_url,
                         role = excluded.role,
                         block_hash = excluded.block_hash,
                         expiry_at = excluded.expiry_at,
@@ -1038,13 +1329,27 @@ class RegistryRepository:
                 )
             await db.commit()
 
+        live_urls = {
+            item.relay_id: item.relay_base_url for item in await self.list_healthy_relays()
+        }
         locked: list[TokenReserveResult] = []
         for token, _block_hash in unique:
             placements = await self.get_token_placements(token)
             if not placements:
                 raise RuntimeError(f"failed to lock token placements: {token}")
-            locked.append(self._placements_to_reserve_result(token, placements))
+            locked.append(
+                await self._placements_to_reserve_result(
+                    token,
+                    placements,
+                    live_urls=live_urls,
+                ),
+            )
 
+        await self.record_token_reservation_batch(
+            entries=unique,
+            results=locked,
+            ttl_seconds=resolution.granted_ttl_seconds,
+        )
         return LockTokensOutcome(
             routes=tuple(locked),
             granted_ttl_seconds=resolution.granted_ttl_seconds,
@@ -1066,33 +1371,37 @@ class RegistryRepository:
             return None
 
         healthy = await self.list_healthy_relays()
-        healthy_rates = {item.relay_id: item.storage_rate for item in healthy}
-        healthy_ids = set(healthy_rates)
+        healthy_by_id = {item.relay_id: item for item in healthy}
 
-        live_targets: list[RelayTarget] = []
+        candidates: list[DownloadTargetCandidate] = []
         for item in placements:
-            if item.relay_id not in healthy_ids:
+            live = healthy_by_id.get(item.relay_id)
+            if live is None:
                 continue
             if not self.is_placement_live(item):
                 continue
-            live_targets.append(
-                RelayTarget(
+            # Emit current Public URL by relay_id; ignore placement URL snapshot.
+            candidates.append(
+                DownloadTargetCandidate(
                     role=item.role,
                     relay_id=item.relay_id,
-                    relay_base_url=item.relay_base_url,
+                    relay_base_url=live.relay_base_url,
+                    storage_rate=live.storage_rate,
                 ),
             )
 
-        if not any(target.role == "primary" for target in live_targets):
+        if not any(candidate.role == "primary" for candidate in candidates):
             return None
 
-        live_targets.sort(
-            key=lambda target: (
-                0 if target.role == "primary" else 1,
-                healthy_rates.get(target.relay_id, 1.0),
-                target.relay_id,
-            ),
-        )
+        steered = order_download_targets_by_load(candidates)
+        live_targets = [
+            RelayTarget(
+                role=item.role,
+                relay_id=item.relay_id,
+                relay_base_url=item.relay_base_url,
+            )
+            for item in steered
+        ]
         return TokenReserveResult(
             token=token,
             targets=tuple(live_targets),
@@ -1126,6 +1435,23 @@ class RegistryRepository:
                 )
                 if cursor.rowcount > 0:
                     removed.append((token, relay_id))
+            removed_set = set(removed)
+            now = utc_now_iso()
+            for token, relay_id in unique:
+                await db.execute(
+                    """
+                    INSERT INTO replica_abandon_events (
+                        token_hash, token_prefix, relay_id, removed, created_at
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        _hash_token(token),
+                        _token_prefix(token),
+                        relay_id,
+                        1 if (token, relay_id) in removed_set else 0,
+                        now,
+                    ),
+                )
             await db.commit()
 
         return removed

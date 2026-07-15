@@ -39,6 +39,8 @@ struct SmbMetadata {
     std::uint64_t ciphertext_length = 0;
     std::uint64_t original_file_length = 0;
     std::string original_file_name;
+    /** 0 = V2 whole-file; 1..5 = V2.1 segmented encryption code. */
+    std::uint16_t segment_code = 0;
 };
 
 }  // namespace twelve_c

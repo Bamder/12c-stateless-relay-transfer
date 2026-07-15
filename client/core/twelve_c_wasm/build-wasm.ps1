@@ -80,6 +80,9 @@ function Get-EmscriptenCandidates {
         $paths += $env:EMSCRIPTEN
     }
     foreach ($root in $roots) {
+        if (-not (Test-Path -LiteralPath $root)) {
+            continue
+        }
         $paths += (Join-Path $root "upstream\emscripten")
     }
     return $paths | Select-Object -Unique
@@ -128,6 +131,55 @@ function Get-EmcmakeCommand([string]$EmscriptenRoot) {
     throw "emcmake not found under $EmscriptenRoot (Emscripten 6+ uses emcmake.exe, not emcmake.bat)"
 }
 
+function Find-CMakeCommand {
+    $cmd = Get-Command cmake.exe -ErrorAction SilentlyContinue
+    if ($cmd -and $cmd.Source) {
+        return $cmd.Source
+    }
+
+    $candidates = @(
+        "C:\Program Files\CMake\bin\cmake.exe",
+        "C:\Program Files (x86)\CMake\bin\cmake.exe",
+        "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe",
+        "C:\Program Files\Microsoft Visual Studio\2022\Professional\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe",
+        "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe",
+        "C:\Program Files\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe",
+        "C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe",
+        "C:\Program Files (x86)\Microsoft Visual Studio\2019\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"
+    )
+    foreach ($candidate in $candidates) {
+        if (Test-Path -LiteralPath $candidate) {
+            return $candidate
+        }
+    }
+
+    throw "cmake not found (install CMake 3.20+ or the Visual Studio C++ CMake tools component)"
+}
+
+# Optional: prefer Ninja when present; otherwise fall back to CMake's default generator.
+function Find-NinjaCommand {
+    $cmd = Get-Command ninja.exe -ErrorAction SilentlyContinue
+    if ($cmd -and $cmd.Source) {
+        return $cmd.Source
+    }
+
+    $candidates = @(
+        "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja\ninja.exe",
+        "C:\Program Files\Microsoft Visual Studio\2022\Professional\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja\ninja.exe",
+        "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja\ninja.exe",
+        "C:\Program Files\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja\ninja.exe",
+        "C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja\ninja.exe",
+        "C:\Program Files (x86)\Microsoft Visual Studio\2019\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja\ninja.exe"
+    )
+    foreach ($candidate in $candidates) {
+        if (Test-Path -LiteralPath $candidate) {
+            return $candidate
+        }
+    }
+
+    return $null
+}
+
 function Initialize-Emscripten {
     $found = Find-EmscriptenRoot
     if ($found) {
@@ -145,6 +197,9 @@ function Initialize-Emscripten {
     ) | Where-Object { $_ -and $_.Trim() -ne "" } | Select-Object -Unique
 
     foreach ($root in $emsdkRoots) {
+        if (-not (Test-Path -LiteralPath $root)) {
+            continue
+        }
         $envScript = Join-Path $root "emsdk_env.ps1"
         if (-not (Test-Path $envScript)) {
             continue
@@ -177,7 +232,11 @@ function Resolve-EmsdkRoot([string]$EmscriptenRoot) {
             "D:\Development\emsdk",
             "D:\emsdk"
         )) {
-        if ($root -and (Test-Path (Join-Path $root "emsdk_env.ps1"))) {
+        if (
+            $root -and
+            (Test-Path -LiteralPath $root) -and
+            (Test-Path (Join-Path $root "emsdk_env.ps1"))
+        ) {
             return $root
         }
     }
@@ -208,8 +267,16 @@ if (-not $EmsdkRoot) {
 }
 
 $Emcmake = Get-EmcmakeCommand $EmscriptenRoot
+$CMake = Find-CMakeCommand
+$Ninja = Find-NinjaCommand
 Write-Host "Using Emscripten: $EmscriptenRoot"
 Write-Host "Using emcmake: $Emcmake"
+Write-Host "Using CMake: $CMake"
+if ($Ninja) {
+    Write-Host "Using Ninja: $Ninja"
+} else {
+    Write-Host "Ninja not found; using CMake default generator"
+}
 
 $OpenSslCrypto = Join-Path $ProjectDir "third_party\openssl-emscripten\lib\libcrypto.a"
 if (-not (Test-Path $OpenSslCrypto)) {
@@ -222,10 +289,19 @@ if (-not (Test-Path $OpenSslCrypto)) {
 New-Item -ItemType Directory -Force -Path $BuildDir | Out-Null
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 
-& $Emcmake cmake -S $ProjectDir -B $BuildDir -DCMAKE_BUILD_TYPE=Release
+$ConfigureArgs = @(
+    "-S", $ProjectDir,
+    "-B", $BuildDir,
+    "-DCMAKE_BUILD_TYPE=Release"
+)
+if ($Ninja) {
+    $ConfigureArgs = @("-G", "Ninja", "-DCMAKE_MAKE_PROGRAM=$Ninja") + $ConfigureArgs
+}
+
+& $Emcmake $CMake @ConfigureArgs
 if ($LASTEXITCODE -ne 0) { throw "emcmake failed" }
 
-cmake --build $BuildDir --config Release
+& $CMake --build $BuildDir --config Release
 if ($LASTEXITCODE -ne 0) { throw "wasm build failed" }
 
 $JsFile = Join-Path $BuildDir "twelve_c_cryptography.js"

@@ -10,13 +10,24 @@ import {
 import {
   CREDENTIAL_LENGTH,
   prepareUpload,
+  prepareUploadStreamingWithHashes,
+  V21_WHOLE_FILE_THRESHOLD_BYTES,
   RegistryTokenOccupiedError,
   resolveRegistryBaseUrl,
   uploadPrepared,
   type OccupiedTokenInfo,
+  type UploadStatusUpdate,
   type UploadReservationMeta,
+  type DownloadStatusUpdate,
+  type BlockHashEntry,
+  type UploadMap,
 } from '@stateless-relay/transfer';
 import type { ClientRuntime } from './runtime.js';
+import {
+  createUploadPrepareWorker,
+  UPLOAD_WASM_BINARY_URL,
+  UPLOAD_WASM_SCRIPT_URL,
+} from './upload-worker-factory.js';
 import {
   bootstrapClientRuntime,
   clearStoredRegistryUrl,
@@ -25,19 +36,37 @@ import {
   saveStoredFileTtlSeconds,
   saveStoredRegistryUrl,
 } from './runtime.js';
-import { CredentialSlotDisplay } from './credential-slots.js';
+import {
+  BREATHING_MIN_MS,
+  BREATHING_MIN_STREAMING_MS,
+  CredentialSlotDisplay,
+} from './credential-slots.js';
 import { renderFileIconForFile, renderFileIconForName } from './file-type-icon.js';
 import { ReceiveCredentialInput } from './receive-credential-input.js';
 import { clearBanner, initBanners, showBanner } from './banner.js';
+import { formatUnknownError } from './format-error.js';
 import {
   clampDurationParts,
   durationPartsFromSeconds,
+  fileTtlPresetSecondsAt,
   formatDurationLabel,
+  formatFileTtlQuickLabel,
+  nearestFileTtlPresetIndex,
 } from './file-ttl.js';
 import {
   getEffectiveCredentialStyle,
   saveStoredCredentialStyle,
 } from './credential-style-settings.js';
+import {
+  buildReceiveUrl,
+  parseReceiveIntent,
+  type ReceiveUrlWarning,
+} from './qr-share-link.js';
+import { copyShareText, createQrSvg, downloadQrSvg } from './qr-share.js';
+
+// ============================================================================
+// 类型定义
+// ============================================================================
 
 type PanelName = 'send' | 'receive' | 'settings';
 
@@ -58,16 +87,36 @@ interface Elements {
   sendFileIcon: HTMLElement;
   sendUploadStamp: HTMLElement;
   sendBtn: HTMLButtonElement;
+  sendTtlSlider: HTMLInputElement;
+  sendTtlQuickValue: HTMLElement;
+  sendTtlTicks: NodeListOf<HTMLButtonElement>;
   sendError: HTMLElement;
   sendInfo: HTMLElement;
+  sendUploadStatus: HTMLElement;
+  sendUploadStatusText: HTMLElement;
   sendProgressText: HTMLElement;
+  sendProgressTrack: HTMLElement;
   sendProgressBar: HTMLElement;
   sendCredentialSlots: HTMLElement;
   copyCredentialBtn: HTMLButtonElement;
+  sendShareSection: HTMLElement;
+  sendShareTtl: HTMLElement;
+  sendShareWarning: HTMLElement;
+  sendShareQr: HTMLElement;
+  sendShareLinkOutput: HTMLInputElement;
+  copyReceiveLinkBtn: HTMLButtonElement;
+  downloadReceiveQrBtn: HTMLButtonElement;
   receiveCredentialSlots: HTMLElement;
+  pasteReceiveCredentialBtn: HTMLButtonElement;
   receiveDownloadBtn: HTMLButtonElement;
   receiveDownloadHint: HTMLElement;
-  receiveFileBar: HTMLElement;
+  receiveDownloadRingFill: SVGCircleElement;
+  receiveDownloadProgressHeader: HTMLElement;
+  receiveDownloadStatus: HTMLElement;
+  receiveDownloadSpinner: HTMLElement;
+  receiveDownloadStatusText: HTMLElement;
+  receiveDownloadProgressText: HTMLElement;
+  receiveFileBar: HTMLButtonElement;
   receiveFilePending: HTMLElement;
   receiveFileReady: HTMLElement;
   receiveFileIcon: HTMLElement;
@@ -95,16 +144,45 @@ interface Elements {
   settingsInfo: HTMLElement;
 }
 
+// ============================================================================
+// 全局状态
+// ============================================================================
+
 let runtime: ClientRuntime | null = null;
 let selectedFile: File | null = null;
 let activePanel: PanelName = 'send';
 let credentialDisplay: CredentialSlotDisplay | null = null;
 let receiveCredentialInput: ReceiveCredentialInput | null = null;
-let receivedFile: { fileName: string; data: Uint8Array } | null = null;
+let receivedFile: { fileName: string; data: Blob } | null = null;
 let receiveDownloading = false;
 let sendInProgress = false;
+let sendShareState: { receiveUrl: string } | null = null;
+let receiveIntentConsumed = false;
+/** 加密阶段进度条比例，保证只增不减，避免 UI 来回晃 */
+let sendPrepareProgressRatio = 0;
+
+// ============================================================================
+// 工具函数
+// ============================================================================
+
+/** 防抖：限制高频调用，默认延迟 150ms */
+function debounce<T extends (...args: never[]) => void>(
+  fn: T,
+  delayMs = 150,
+): (...args: Parameters<T>) => void {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  return (...args: Parameters<T>) => {
+    if (timer !== null) clearTimeout(timer);
+    timer = setTimeout(() => {
+      timer = null;
+      fn(...args);
+    }, delayMs);
+  };
+}
 
 type ReceiveDownloadState = 'idle' | 'ready' | 'downloading' | 'done';
+
+const RECEIVE_DOWNLOAD_RING_LENGTH = 100;
 
 const RECEIVE_DOWNLOAD_LABELS: Record<ReceiveDownloadState, string> = {
   idle: '点击下载',
@@ -112,6 +190,10 @@ const RECEIVE_DOWNLOAD_LABELS: Record<ReceiveDownloadState, string> = {
   downloading: '下载中',
   done: '已下载',
 };
+
+// ============================================================================
+// DOM 元素收集
+// ============================================================================
 
 function $(id: string): HTMLElement {
   const node = document.getElementById(id);
@@ -139,16 +221,42 @@ function collectElements(): Elements {
     sendFileIcon: $('send-file-icon'),
     sendUploadStamp: $('send-upload-stamp'),
     sendBtn: $('send-btn') as HTMLButtonElement,
+    sendTtlSlider: $('send-ttl-slider') as HTMLInputElement,
+    sendTtlQuickValue: $('send-ttl-quick-value'),
+    sendTtlTicks: document.querySelectorAll<HTMLButtonElement>('.send-ttl-tick'),
     sendError: $('send-error'),
     sendInfo: $('send-info'),
+    sendUploadStatus: $('send-upload-status'),
+    sendUploadStatusText: $('send-upload-status-text'),
     sendProgressText: $('send-progress-text'),
+    sendProgressTrack: $('send-progress-track'),
     sendProgressBar: $('send-progress-bar'),
     sendCredentialSlots: $('send-credential-slots'),
     copyCredentialBtn: $('copy-credential-btn') as HTMLButtonElement,
+    sendShareSection: $('send-share-section'),
+    sendShareTtl: $('send-share-ttl'),
+    sendShareWarning: $('send-share-warning'),
+    sendShareQr: $('send-share-qr'),
+    sendShareLinkOutput: $('send-share-link-output') as HTMLInputElement,
+    copyReceiveLinkBtn: $('copy-receive-link-btn') as HTMLButtonElement,
+    downloadReceiveQrBtn: $('download-receive-qr-btn') as HTMLButtonElement,
     receiveCredentialSlots: $('receive-credential-slots'),
+    pasteReceiveCredentialBtn: $('paste-receive-credential-btn') as HTMLButtonElement,
     receiveDownloadBtn: $('receive-download-btn') as HTMLButtonElement,
     receiveDownloadHint: $('receive-download-hint'),
-    receiveFileBar: $('receive-file-bar'),
+    receiveDownloadRingFill: (() => {
+      const node = document.getElementById('receive-download-ring-fill');
+      if (!(node instanceof SVGCircleElement)) {
+        throw new Error('missing element #receive-download-ring-fill');
+      }
+      return node;
+    })(),
+    receiveDownloadProgressHeader: $('receive-download-progress-header'),
+    receiveDownloadStatus: $('receive-download-status'),
+    receiveDownloadSpinner: $('receive-download-spinner'),
+    receiveDownloadStatusText: $('receive-download-status-text'),
+    receiveDownloadProgressText: $('receive-download-progress-text'),
+    receiveFileBar: $('receive-file-bar') as HTMLButtonElement,
     receiveFilePending: $('receive-file-pending'),
     receiveFileReady: $('receive-file-ready'),
     receiveFileIcon: $('receive-file-icon'),
@@ -189,6 +297,44 @@ function formatBytes(size: number): string {
   return `${(size / (1024 * 1024)).toFixed(2)} MB`;
 }
 
+/** Whole-transfer byte progress: stable denominator, monotonic numerator. */
+function formatTransferBytesProgress(
+  transferred: number | undefined,
+  total: number | undefined,
+): string {
+  if (
+    total === undefined ||
+    !Number.isFinite(total) ||
+    total <= 0 ||
+    transferred === undefined ||
+    !Number.isFinite(transferred)
+  ) {
+    return '';
+  }
+  return `（${formatBytes(Math.max(0, transferred))} / ${formatBytes(total)}）`;
+}
+
+/** Prefetch window before SMB: (? / ceiling) until bytes start flowing. */
+function formatPrefetchBytesProgress(
+  received: number | undefined,
+  ceiling: number | undefined,
+): string {
+  if (
+    ceiling === undefined ||
+    !Number.isFinite(ceiling) ||
+    ceiling <= 0
+  ) {
+    return '';
+  }
+  const left =
+    received !== undefined &&
+    Number.isFinite(received) &&
+    received > 0
+      ? formatBytes(received)
+      : '- MB';
+  return `（${left} / 最高 ${formatBytes(ceiling)}）`;
+}
+
 function setBootProgress(ratio: number, message: string): void {
   el.bootStatus.textContent = message;
   el.bootProgressBar.style.width = `${Math.max(0, Math.min(100, ratio * 100))}%`;
@@ -198,6 +344,10 @@ function showApp(): void {
   el.bootScreen.classList.add('hidden');
   el.app.classList.remove('hidden');
 }
+
+// ============================================================================
+// 导航与面板切换
+// ============================================================================
 
 function switchPanel(panel: PanelName): void {
   activePanel = panel;
@@ -213,6 +363,10 @@ function updateRegistryLabel(): void {
   el.registryUrlLabel.textContent = runtime?.registryUrl ?? '—';
 }
 
+// ============================================================================
+// 运行时与启动
+// ============================================================================
+
 async function reloadRuntime(): Promise<void> {
   setBootProgress(0.35, '正在连接 Registry…');
   runtime = await bootstrapClientRuntime();
@@ -226,6 +380,10 @@ function requireRuntime(): ClientRuntime {
   }
   return runtime;
 }
+
+// ============================================================================
+// 发送面板 - 文件选择与 UI 状态
+// ============================================================================
 
 function clearUploadStamp(): void {
   el.sendUploadStamp.classList.remove('visible');
@@ -244,6 +402,14 @@ function showUploadStamp(): void {
 function updateSendControls(): void {
   el.sendBtn.disabled = sendInProgress || !selectedFile;
   el.sendFileInput.disabled = sendInProgress;
+  el.sendTtlSlider.disabled = sendInProgress;
+  for (const tick of el.sendTtlTicks) {
+    tick.disabled = sendInProgress;
+  }
+  el.fileTtlHoursInput.disabled = sendInProgress;
+  el.fileTtlMinutesInput.disabled = sendInProgress;
+  el.fileTtlSecondsInput.disabled = sendInProgress;
+  el.confirmFileTtlBtn.disabled = sendInProgress;
   el.sendFileDropzone.classList.toggle('is-disabled', sendInProgress);
   el.sendFileDropzone.toggleAttribute('aria-disabled', sendInProgress);
 }
@@ -268,7 +434,123 @@ function updateSendFilePicker(): void {
   updateSendControls();
 }
 
+function formatUploadStatusMessage(
+  status: UploadStatusUpdate | { phase: 'reading' },
+): string {
+  switch (status.phase) {
+    case 'reading':
+      return '正在读取文件';
+    case 'preparing':
+      if (
+        status.segmentTotal !== undefined &&
+        status.segmentTotal > 1 &&
+        status.segmentIndex !== undefined &&
+        status.segmentIndex > 0
+      ) {
+        return `正在加密并分块（GCM 段 ${status.segmentIndex} / ${status.segmentTotal}）`;
+      }
+      if (
+        status.bytesFed !== undefined &&
+        status.totalBytes !== undefined &&
+        status.totalBytes > 0
+      ) {
+        return '正在加密并分块';
+      }
+      return '正在加密并分块';
+    case 'hashing':
+      return status.total > 1
+        ? `正在计算块哈希（${status.index} / ${status.total}）`
+        : '正在计算块哈希';
+    case 'reserving':
+      return '等待服务器返回各块的定位结果';
+    case 'uploading':
+      if (status.completed >= status.total) {
+        return '上传完成';
+      }
+      if (status.completed === 0 && status.inFlight > 0) {
+        return status.total > 1
+          ? `正在上传首批数据（0 / ${status.total} 已完成，${status.inFlight} 路已发出）`
+          : '正在上传';
+      }
+      return status.total > 1
+        ? `正在上传（${status.completed} / ${status.total} 块已完成${status.inFlight > 0 ? `，${status.inFlight} 路进行中` : ''}）`
+        : '正在上传';
+    default:
+      return '正在处理';
+  }
+}
+
+function setSendUploadStatus(
+  status: UploadStatusUpdate | { phase: 'reading' } | null,
+): void {
+  if (!status) {
+    el.sendUploadStatus.classList.add('hidden');
+    el.sendProgressTrack.classList.remove('indeterminate');
+    sendPrepareProgressRatio = 0;
+    return;
+  }
+
+  el.sendUploadStatus.classList.remove('hidden');
+  el.sendUploadStatusText.textContent = formatUploadStatusMessage(status);
+
+  if (
+    status.phase === 'preparing' &&
+    status.bytesFed !== undefined &&
+    status.totalBytes !== undefined &&
+    status.totalBytes > 0
+  ) {
+    el.sendProgressText.textContent = `${formatBytes(status.bytesFed)} / ${formatBytes(status.totalBytes)}`;
+    el.sendProgressTrack.classList.remove('indeterminate');
+    const ratio = Math.max(
+      sendPrepareProgressRatio,
+      status.bytesFed / status.totalBytes,
+    );
+    sendPrepareProgressRatio = ratio;
+    el.sendProgressBar.style.width = `${Math.max(4, Math.round(ratio * 100))}%`;
+    return;
+  }
+
+  if (status.phase === 'hashing' && status.total > 0) {
+    el.sendProgressText.textContent = `${status.index} / ${status.total}`;
+    el.sendProgressTrack.classList.remove('indeterminate');
+    const ratio = status.index / status.total;
+    el.sendProgressBar.style.width = `${Math.max(4, Math.round(ratio * 100))}%`;
+    return;
+  }
+
+  if (status.phase === 'uploading') {
+    sendPrepareProgressRatio = 0;
+    const transferHint = formatTransferBytesProgress(
+      status.transferBytesTransferred,
+      status.transferBytesTotal,
+    );
+    el.sendProgressText.textContent =
+      status.inFlight > 0
+        ? `${status.completed} / ${status.total}（${status.inFlight} 进行中）${transferHint}`
+        : `${status.completed} / ${status.total}${transferHint}`;
+    if (status.completed >= status.total) {
+      el.sendProgressTrack.classList.remove('indeterminate');
+      el.sendProgressBar.style.width = '100%';
+      return;
+    }
+    if (status.completed === 0 && status.inFlight > 0) {
+      el.sendProgressTrack.classList.add('indeterminate');
+      el.sendProgressBar.style.width = '';
+      return;
+    }
+    el.sendProgressTrack.classList.remove('indeterminate');
+    const ratio = status.total > 0 ? status.completed / status.total : 0;
+    el.sendProgressBar.style.width = `${Math.max(4, Math.round(ratio * 100))}%`;
+    return;
+  }
+
+  el.sendProgressTrack.classList.add('indeterminate');
+  el.sendProgressBar.style.width = '';
+  el.sendProgressText.textContent = '';
+}
+
 function resetSendProgress(): void {
+  setSendUploadStatus(null);
   el.sendProgressBar.style.width = '0%';
   el.sendProgressText.textContent = '';
 }
@@ -278,10 +560,71 @@ function resetSendCredential(): void {
   el.copyCredentialBtn.disabled = true;
 }
 
+function clearSendShare(): void {
+  sendShareState = null;
+  el.sendShareSection.classList.add('hidden');
+  el.sendShareTtl.textContent = '';
+  el.sendShareWarning.textContent = '';
+  el.sendShareWarning.classList.add('hidden');
+  el.sendShareQr.replaceChildren();
+  el.sendShareLinkOutput.value = '';
+  el.copyReceiveLinkBtn.disabled = true;
+  el.copyReceiveLinkBtn.textContent = '复制接收链接';
+  el.downloadReceiveQrBtn.disabled = true;
+}
+
+function formatShareWarnings(warnings: readonly ReceiveUrlWarning[]): string {
+  const messages: string[] = [];
+  if (warnings.includes('loopback')) {
+    messages.push('当前 Registry 是本机回环地址，其他设备通常无法访问此二维码。');
+  }
+  if (warnings.includes('insecure')) {
+    messages.push('当前链接使用 HTTP；公网分享请改用 HTTPS，避免提取凭证被窃取。');
+  }
+  return messages.join(' ');
+}
+
+function showSendShare(
+  credential: string,
+  requestedTtlSeconds: number,
+  reservation: UploadReservationMeta | undefined,
+): void {
+  clearSendShare();
+  el.sendShareSection.classList.remove('hidden');
+
+  const grantedTtlSeconds =
+    reservation?.grantedTtlSeconds ?? requestedTtlSeconds;
+  el.sendShareTtl.textContent =
+    `服务器实际有效时长：${formatDurationLabel(grantedTtlSeconds)}` +
+    '（从登记数据位置时开始计时）';
+
+  try {
+    const client = requireRuntime();
+    const receiveUrl = buildReceiveUrl(client.registryUrl, credential);
+    const qrSvg = createQrSvg(receiveUrl.url);
+    sendShareState = { receiveUrl: receiveUrl.url };
+    el.sendShareLinkOutput.value = receiveUrl.url;
+    el.sendShareQr.innerHTML = qrSvg;
+    el.copyReceiveLinkBtn.disabled = false;
+    el.downloadReceiveQrBtn.disabled = false;
+
+    const warning = formatShareWarnings(receiveUrl.warnings);
+    if (warning) {
+      el.sendShareWarning.textContent = warning;
+      el.sendShareWarning.classList.remove('hidden');
+    }
+  } catch (error) {
+    el.sendShareWarning.textContent =
+      `文件已上传，但无法生成可扫码链接：${formatUnknownError(error)}`;
+    el.sendShareWarning.classList.remove('hidden');
+  }
+}
+
 function resetSendPanel(): void {
   resetSendCredential();
   resetSendProgress();
   clearUploadStamp();
+  clearSendShare();
 }
 
 function formatUploadReservationDegradedMessage(
@@ -305,6 +648,10 @@ function formatUploadReservationDegradedMessage(
   return `${parts.join('；')}（当前 Relay 存储能力或冗余不足）。`;
 }
 
+// ============================================================================
+// 发送面板 - 上传流程
+// ============================================================================
+
 async function handleSend(): Promise<void> {
   clearBanner(el.sendError);
   clearBanner(el.sendInfo);
@@ -314,6 +661,8 @@ async function handleSend(): Promise<void> {
     showBanner(el.sendError, '请先选择文件');
     return;
   }
+
+  const requestedTtlSeconds = getEffectiveFileTtlSeconds();
 
   const client = requireRuntime();
   const display = credentialDisplay;
@@ -326,26 +675,63 @@ async function handleSend(): Promise<void> {
   updateSendControls();
   display.startBreathing();
 
-  const bytesPromise = selectedFile
-    .arrayBuffer()
-    .then((buffer) => new Uint8Array(buffer));
-  await display.enterReelWhenReady(bytesPromise);
-  const bytes = await bytesPromise;
-
-  const maxAttempts = DEFAULT_MAX_RESERVATION_ATTEMPTS;
-  let lastOccupiedTokens: OccupiedTokenInfo[] = [];
-
   try {
+    const useStreamingUpload =
+      selectedFile.size > V21_WHOLE_FILE_THRESHOLD_BYTES;
+    const bytesPromise = useStreamingUpload
+      ? Promise.resolve(selectedFile.size)
+      : selectedFile.arrayBuffer().then((buffer) => new Uint8Array(buffer));
+    if (!useStreamingUpload) {
+      setSendUploadStatus({ phase: 'reading' });
+    }
+    await display.enterReelWhenReady(
+      bytesPromise,
+      useStreamingUpload ? BREATHING_MIN_STREAMING_MS : BREATHING_MIN_MS,
+    );
+    const bytes = useStreamingUpload
+      ? null
+      : ((await bytesPromise) as Uint8Array);
+
+    const maxAttempts = DEFAULT_MAX_RESERVATION_ATTEMPTS;
+    let lastOccupiedTokens: OccupiedTokenInfo[] = [];
+
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       const credential = generateCredential(getEffectiveCredentialStyle());
 
       try {
-        const uploads = prepareUpload(
-          bytes,
-          credential,
-          client.twelveC,
-          selectedFile.name,
-        );
+        let uploads: UploadMap;
+        let blockHashes: BlockHashEntry[] | undefined;
+        const wirePrepareOptions = {
+          relayMaxBodyBytes: client.relayMaxBodyBytes,
+          createUploadWorker: createUploadPrepareWorker,
+          wasmScriptUrl: UPLOAD_WASM_SCRIPT_URL,
+          wasmBinaryUrl: UPLOAD_WASM_BINARY_URL,
+        };
+        if (useStreamingUpload) {
+          const prepared = await prepareUploadStreamingWithHashes(
+            selectedFile,
+            credential,
+            client.twelveC,
+            selectedFile.name,
+            undefined,
+            (status) => setSendUploadStatus(status),
+            wirePrepareOptions,
+          );
+          uploads = prepared.uploads;
+          blockHashes = prepared.blockHashes;
+        } else {
+          setSendUploadStatus({ phase: 'preparing' });
+          uploads = prepareUpload(
+            bytes!,
+            credential,
+            client.twelveC,
+            selectedFile.name,
+            undefined,
+            {
+              relayMaxBodyBytes: client.relayMaxBodyBytes,
+            },
+          );
+        }
         await display.revealSequential(credential);
         el.copyCredentialBtn.disabled = false;
 
@@ -355,14 +741,17 @@ async function handleSend(): Promise<void> {
           client.stack.uploadClient,
           {
             registry: client.stack.registry,
-            ttlSeconds: getEffectiveFileTtlSeconds(),
+            ttlSeconds: requestedTtlSeconds,
+            precomputedBlockHashes: blockHashes,
           },
-          (progress) => {
-            const ratio = progress.total > 0 ? progress.completed / progress.total : 0;
-            el.sendProgressBar.style.width = `${Math.round(ratio * 100)}%`;
-            el.sendProgressText.textContent = `${progress.completed} / ${progress.total}`;
+          (status: UploadStatusUpdate) => {
+            setSendUploadStatus(status);
           },
         );
+
+        setSendUploadStatus(null);
+        el.sendProgressBar.style.width = '100%';
+        el.sendProgressText.textContent = `${uploads.size} / ${uploads.size}`;
 
         if (reservation?.degraded) {
           showBanner(
@@ -371,6 +760,7 @@ async function handleSend(): Promise<void> {
           );
         }
 
+        showSendShare(credential, requestedTtlSeconds, reservation);
         showUploadStamp();
         void replicaSync?.catch(() => {
           /* replica 后台补传失败不影响主流程 */
@@ -381,7 +771,7 @@ async function handleSend(): Promise<void> {
           throw error;
         }
 
-        lastOccupiedTokens = error.occupiedTokens;
+        lastOccupiedTokens = (error as RegistryTokenOccupiedError).occupiedTokens;
         display.startReelSpinning();
 
         if (attempt < maxAttempts) {
@@ -392,7 +782,8 @@ async function handleSend(): Promise<void> {
 
     throw new UploadTokenReservationExhaustedError(maxAttempts, lastOccupiedTokens);
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    setSendUploadStatus(null);
+    const message = formatUnknownError(error);
     showBanner(el.sendError, message);
     if (!display.getValue()) {
       display.reset();
@@ -403,19 +794,28 @@ async function handleSend(): Promise<void> {
   }
 }
 
-function saveBlob(filename: string, data: Uint8Array): void {
-  const copy = new Uint8Array(data);
-  const blob = new Blob([copy], { type: 'application/octet-stream' });
-  const url = URL.createObjectURL(blob);
+// ============================================================================
+// 接收面板 - 文件下载与保存
+// ============================================================================
+
+function saveBlob(filename: string, data: Blob): void {
+  const url = URL.createObjectURL(data);
   const anchor = document.createElement('a');
   anchor.href = url;
   anchor.download = filename;
-  anchor.click();
-  URL.revokeObjectURL(url);
+  anchor.hidden = true;
+  document.body.appendChild(anchor);
+  try {
+    anchor.click();
+  } finally {
+    anchor.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
 }
 
 function resetReceiveFileBar(): void {
   receivedFile = null;
+  el.receiveFileBar.disabled = true;
   el.receiveFileBar.classList.remove('receive-file-bar--ready');
   el.receiveFileBar.classList.add('receive-file-bar--pending');
   el.receiveFileBar.classList.remove('is-clickable');
@@ -425,6 +825,298 @@ function resetReceiveFileBar(): void {
   el.receiveFileIcon.replaceChildren();
   el.receiveFileName.textContent = '';
   el.receiveFileSize.textContent = '';
+}
+
+function formatDownloadStatusMessage(status: DownloadStatusUpdate): string {
+  switch (status.phase) {
+    case 'resolving_initial': {
+      const from = status.fromIndex + 1;
+      const to = status.toIndex;
+      if (to <= from) {
+        return `正在定位初始接收窗口（共 ${status.total} 块，包含SMB）`;
+      }
+      return `正在定位初始接收窗口（第 ${from}–${to} 块，共 ${status.total} 块，包含SMB）`;
+    }
+    case 'resolving_window': {
+      const from = status.fromIndex + 1;
+      const to = status.toIndex;
+      if (to <= from) {
+        return `正在定位接收窗口（共 ${status.total} 块）`;
+      }
+      return `正在定位接收窗口（第 ${from}–${to} 块，共 ${status.total} 块）`;
+    }
+    case 'awaiting_metadata_block': {
+      const n = status.prefetchCount ?? 0;
+      const bytesHint = formatPrefetchBytesProgress(
+        status.prefetchBytesReceived,
+        status.prefetchBytesCeiling,
+      );
+      if (n > 1) {
+        return `正在预获取 ${n} 块数据${bytesHint}`;
+      }
+      if (n === 1) {
+        return `正在预获取 1 块数据${bytesHint}`;
+      }
+      return `正在预获取数据${bytesHint}`;
+    }
+    case 'waiting_metadata_block':
+      if (status.reason === 'registry') {
+        return '等待发送方上传（首块尚未就绪，将自动继续）';
+      }
+      return '首块传输不稳定，正在自动重试';
+    case 'parsing_metadata':
+      return '正在解析 SMB';
+    case 'downloading':
+      if (status.completed >= status.total) {
+        return '下载完成';
+      }
+      if (status.completed === 0 && (status.inFlight ?? 0) > 0) {
+        return status.total > 1
+          ? `正在下载首批数据（0 / ${status.total} 已完成，${status.inFlight} 路已发出）`
+          : '正在下载';
+      }
+      if (status.completed === 1 && status.total > 1) {
+        const lanes =
+          (status.inFlight ?? 0) > 0 ? `，${status.inFlight} 路进行中` : '';
+        return `正在下载（SMB 已就绪，${status.completed} / ${status.total} 块已完成${lanes}）`;
+      }
+      return status.total > 1
+        ? `正在下载（${status.completed} / ${status.total} 块已完成${
+            (status.inFlight ?? 0) > 0 ? `，${status.inFlight} 路进行中` : ''
+          }）`
+        : '正在下载';
+    case 'decrypting':
+      return '正在解密文件内容';
+    default:
+      return '正在处理';
+  }
+}
+
+function isPreBlockProgressPhase(status: DownloadStatusUpdate): boolean {
+  return (
+    status.phase === 'resolving_initial' ||
+    status.phase === 'awaiting_metadata_block' ||
+    status.phase === 'waiting_metadata_block' ||
+    status.phase === 'parsing_metadata'
+  );
+}
+
+function setReceiveDownloadStatus(status: DownloadStatusUpdate | null): void {
+  if (!status) {
+    el.receiveDownloadProgressHeader.classList.add('hidden');
+    el.receiveDownloadSpinner.classList.add('hidden');
+    el.receiveDownloadStatusText.textContent = '';
+    return;
+  }
+
+  el.receiveDownloadProgressHeader.classList.remove('hidden');
+  el.receiveDownloadSpinner.classList.remove('hidden');
+  el.receiveDownloadStatusText.textContent = formatDownloadStatusMessage(status);
+}
+
+let receiveDownloadStatusRank = 0;
+let receiveDownloadBlockProgress: {
+  completed: number;
+  total: number;
+  transferBytesTransferred?: number;
+  transferBytesTotal?: number;
+} | null = null;
+let receiveDownloadBlockProgressLocked = false;
+let receivePrefetchByteProgress: {
+  received: number;
+  ceiling: number;
+} | null = null;
+
+function paintReceiveDownloadBlockProgress(): void {
+  if (receiveDownloadBlockProgress === null) {
+    return;
+  }
+  const {
+    completed,
+    total,
+    transferBytesTransferred,
+    transferBytesTotal,
+  } = receiveDownloadBlockProgress;
+  const transferHint = formatTransferBytesProgress(
+    transferBytesTransferred,
+    transferBytesTotal,
+  );
+  el.receiveDownloadProgressText.classList.remove('hidden');
+  el.receiveDownloadProgressText.textContent = transferHint
+    ? `${completed} / ${total}${transferHint}`
+    : `${completed} / ${total}`;
+  el.receiveDownloadRingFill.style.strokeDasharray = '';
+  const ratio = total > 0 ? completed / total : 0;
+  el.receiveDownloadRingFill.style.strokeDashoffset = String(
+    RECEIVE_DOWNLOAD_RING_LENGTH * (1 - ratio),
+  );
+}
+
+function rememberReceiveDownloadBlockProgress(
+  completed: number,
+  total: number,
+  transferBytesTransferred?: number,
+  transferBytesTotal?: number,
+): void {
+  receiveDownloadBlockProgress = {
+    completed,
+    total,
+    ...(transferBytesTransferred !== undefined
+      ? { transferBytesTransferred }
+      : {}),
+    ...(transferBytesTotal !== undefined ? { transferBytesTotal } : {}),
+  };
+  receiveDownloadBlockProgressLocked = true;
+}
+
+const RECEIVE_DOWNLOAD_PHASE_RANK: Record<DownloadStatusUpdate['phase'], number> =
+  {
+    resolving_initial: 10,
+    awaiting_metadata_block: 20,
+    waiting_metadata_block: 25,
+    parsing_metadata: 30,
+    resolving_window: 35,
+    downloading: 40,
+    decrypting: 50,
+  };
+
+function paintReceivePrefetchByteProgress(): void {
+  if (receivePrefetchByteProgress === null) {
+    return;
+  }
+  const hint = formatPrefetchBytesProgress(
+    receivePrefetchByteProgress.received,
+    receivePrefetchByteProgress.ceiling,
+  );
+  if (!hint) {
+    return;
+  }
+  el.receiveDownloadProgressText.classList.remove('hidden');
+  el.receiveDownloadProgressText.textContent = hint.replace(/^（|）$/g, '');
+}
+
+function setReceiveDownloadProgress(status: DownloadStatusUpdate | null): void {
+  if (status === null) {
+    receiveDownloadStatusRank = 0;
+    receiveDownloadBlockProgress = null;
+    receiveDownloadBlockProgressLocked = false;
+    receivePrefetchByteProgress = null;
+    el.receiveDownloadProgressHeader.classList.add('hidden');
+    el.receiveDownloadSpinner.classList.add('hidden');
+    el.receiveDownloadStatusText.textContent = '';
+    el.receiveDownloadProgressText.classList.add('hidden');
+    el.receiveDownloadProgressText.textContent = '';
+    el.receiveDownloadRingFill.style.strokeDashoffset = '0';
+    return;
+  }
+
+  if (status.phase === 'resolving_window') {
+    // After block progress is live, keep downloading text; resolve is just
+    // background steering for the sliding window and must not cover it.
+    if (receiveDownloadBlockProgressLocked) {
+      paintReceiveDownloadBlockProgress();
+      return;
+    }
+    receiveDownloadStatusRank = Math.max(
+      receiveDownloadStatusRank,
+      RECEIVE_DOWNLOAD_PHASE_RANK.resolving_window,
+    );
+    el.receiveDownloadBtn.classList.remove(
+      'receive-download-trigger--ring-indeterminate',
+    );
+    setReceiveDownloadStatus(status);
+    return;
+  }
+
+  if (status.phase === 'awaiting_metadata_block') {
+    if (
+      status.prefetchBytesCeiling !== undefined &&
+      status.prefetchBytesCeiling > 0
+    ) {
+      receivePrefetchByteProgress = {
+        received: Math.max(
+          receivePrefetchByteProgress?.received ?? 0,
+          status.prefetchBytesReceived ?? 0,
+        ),
+        ceiling: status.prefetchBytesCeiling,
+      };
+    }
+  }
+
+  const rank = RECEIVE_DOWNLOAD_PHASE_RANK[status.phase];
+  if (rank < receiveDownloadStatusRank) {
+    if (receiveDownloadBlockProgressLocked) {
+      paintReceiveDownloadBlockProgress();
+    } else if (receivePrefetchByteProgress !== null) {
+      // e.g. waiting_metadata_block text is newer; keep refreshing byte totals.
+      paintReceivePrefetchByteProgress();
+    }
+    return;
+  }
+  receiveDownloadStatusRank = rank;
+
+  if (status.phase === 'downloading') {
+    receivePrefetchByteProgress = null;
+    rememberReceiveDownloadBlockProgress(
+      status.completed,
+      status.total,
+      status.transferBytesTransferred,
+      status.transferBytesTotal,
+    );
+  }
+
+  el.receiveDownloadBtn.classList.remove('receive-download-trigger--ring-indeterminate');
+  setReceiveDownloadStatus(status);
+
+  if (receiveDownloadBlockProgressLocked) {
+    paintReceiveDownloadBlockProgress();
+    return;
+  }
+
+  if (status.phase === 'awaiting_metadata_block') {
+    el.receiveDownloadRingFill.style.strokeDasharray = '';
+    el.receiveDownloadRingFill.style.strokeDashoffset = '';
+    el.receiveDownloadBtn.classList.add(
+      'receive-download-trigger--ring-indeterminate',
+    );
+    paintReceivePrefetchByteProgress();
+    return;
+  }
+
+  if (
+    status.phase === 'waiting_metadata_block' &&
+    receivePrefetchByteProgress !== null
+  ) {
+    el.receiveDownloadRingFill.style.strokeDasharray = '';
+    el.receiveDownloadRingFill.style.strokeDashoffset = '';
+    el.receiveDownloadBtn.classList.add(
+      'receive-download-trigger--ring-indeterminate',
+    );
+    paintReceivePrefetchByteProgress();
+    return;
+  }
+
+  if (isPreBlockProgressPhase(status)) {
+    el.receiveDownloadProgressText.classList.add('hidden');
+    el.receiveDownloadProgressText.textContent = '';
+    el.receiveDownloadRingFill.style.strokeDasharray = '';
+    el.receiveDownloadRingFill.style.strokeDashoffset = '';
+    el.receiveDownloadBtn.classList.add('receive-download-trigger--ring-indeterminate');
+    return;
+  }
+
+  el.receiveDownloadRingFill.style.strokeDasharray = '';
+
+  if (status.phase === 'downloading') {
+    paintReceiveDownloadBlockProgress();
+    return;
+  }
+
+  if (status.phase === 'decrypting') {
+    el.receiveDownloadProgressText.classList.remove('hidden');
+    el.receiveDownloadProgressText.textContent = `${status.total} / ${status.total}`;
+    el.receiveDownloadRingFill.style.strokeDashoffset = '0';
+  }
 }
 
 function setReceiveDownloadVisual(state: ReceiveDownloadState): void {
@@ -455,16 +1147,24 @@ function updateReceiveDownloadButton(): void {
   el.receiveDownloadBtn.disabled = !complete;
 }
 
-function showReceivedFile(fileName: string, data: Uint8Array): void {
+function showReceivedFile(
+  fileName: string,
+  data: Blob,
+  autoSaveAttempted = false,
+): void {
   receivedFile = { fileName, data };
+  el.receiveFileBar.disabled = false;
   el.receiveFileBar.classList.remove('receive-file-bar--pending');
   el.receiveFileBar.classList.add('receive-file-bar--ready', 'is-clickable');
   el.receiveFilePending.classList.add('hidden');
   el.receiveFileReady.classList.remove('hidden');
   el.receiveFileSaveHint.classList.remove('hidden');
+  el.receiveFileSaveHint.textContent = autoSaveAttempted
+    ? '已尝试自动保存；若浏览器未保存，请点击此处'
+    : '点击保存到本地';
   renderFileIconForName(el.receiveFileIcon, fileName);
   el.receiveFileName.textContent = fileName;
-  el.receiveFileSize.textContent = formatBytes(data.byteLength);
+  el.receiveFileSize.textContent = formatBytes(data.size);
   updateReceiveDownloadButton();
 }
 
@@ -475,7 +1175,12 @@ function handleSaveReceivedFile(): void {
   saveBlob(receivedFile.fileName, receivedFile.data);
 }
 
-async function handleReceiveDownload(): Promise<void> {
+async function handleReceiveDownload(
+  options: { autoSave?: boolean } = {},
+): Promise<void> {
+  if (receiveDownloading) {
+    return;
+  }
   clearBanner(el.receiveError);
   const credential = receiveCredentialInput?.getValue() ?? '';
   if (credential.length !== CREDENTIAL_LENGTH) {
@@ -491,16 +1196,33 @@ async function handleReceiveDownload(): Promise<void> {
     const received = await receiveFile(credential, {
       twelveC: client.twelveC,
       receiveTransport: client.stack.receiveTransport,
+    }, {
+      relayMaxBodyBytes: client.relayMaxBodyBytes,
+      onStatus: (status) => setReceiveDownloadProgress(status),
     });
-    showReceivedFile(received.fileName, received.data);
+    showReceivedFile(received.fileName, received.data, options.autoSave === true);
+    if (options.autoSave) {
+      try {
+        saveBlob(received.fileName, received.data);
+      } catch (saveError) {
+        console.warn('[receive] automatic save was blocked:', saveError);
+        el.receiveFileSaveHint.textContent = '浏览器未能自动保存，请点击此处';
+      }
+    }
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    console.error('[receive] download failed:', error);
+    const message = formatUnknownError(error);
     showBanner(el.receiveError, message);
   } finally {
     receiveDownloading = false;
+    setReceiveDownloadProgress(null);
     updateReceiveDownloadButton();
   }
 }
+
+// ============================================================================
+// 设置面板 - 文件有效期 (TTL)
+// ============================================================================
 
 function applyDurationPartsToInputs(parts: ReturnType<typeof durationPartsFromSeconds>): void {
   el.fileTtlHoursInput.value = String(parts.hours);
@@ -512,10 +1234,33 @@ function updateFileTtlCurrentLabel(totalSeconds: number): void {
   el.fileTtlCurrent.textContent = formatDurationLabel(totalSeconds);
 }
 
-function syncFileTtlSettingsUi(): void {
-  const totalSeconds = getEffectiveFileTtlSeconds();
+function updateSendTtlTickActive(index: number): void {
+  for (const tick of el.sendTtlTicks) {
+    const tickIndex = Number(tick.dataset.ttlPresetIndex);
+    tick.classList.toggle('is-active', tickIndex === index);
+  }
+}
+
+function syncSendTtlQuickUi(totalSeconds: number): void {
+  const index = nearestFileTtlPresetIndex(totalSeconds);
+  const maxIndex = Math.max(1, Number(el.sendTtlSlider.max) || 1);
+  el.sendTtlSlider.value = String(index);
+  el.sendTtlSlider.style.setProperty(
+    '--ttl-slider-progress',
+    `${(index / maxIndex) * 100}%`,
+  );
+  el.sendTtlQuickValue.textContent = formatFileTtlQuickLabel(totalSeconds);
+  updateSendTtlTickActive(index);
+}
+
+function applyFileTtlToUi(totalSeconds: number): void {
   applyDurationPartsToInputs(durationPartsFromSeconds(totalSeconds));
   updateFileTtlCurrentLabel(totalSeconds);
+  syncSendTtlQuickUi(totalSeconds);
+}
+
+function syncFileTtlSettingsUi(): void {
+  applyFileTtlToUi(getEffectiveFileTtlSeconds());
 }
 
 function readDurationInputs(): ReturnType<typeof clampDurationParts> {
@@ -526,21 +1271,35 @@ function readDurationInputs(): ReturnType<typeof clampDurationParts> {
   );
 }
 
+function applyFileTtlPresetIndex(index: number): void {
+  const totalSeconds = fileTtlPresetSecondsAt(index);
+  saveStoredFileTtlSeconds(totalSeconds);
+  applyFileTtlToUi(totalSeconds);
+}
+
+function handleSendTtlSliderInput(): void {
+  const index = Number(el.sendTtlSlider.value);
+  applyFileTtlPresetIndex(index);
+}
+
 function handleConfirmFileTtl(): void {
   clearBanner(el.settingsError);
   clearBanner(el.settingsInfo);
 
   const parts = readDurationInputs();
   if (parts.totalSeconds <= 0) {
-    showBanner(el.settingsError, '文件有效时间必须大于 0 秒');
+    showBanner(el.settingsError, '文件与二维码有效期必须大于 0 秒');
     return;
   }
 
-  applyDurationPartsToInputs(parts);
   saveStoredFileTtlSeconds(parts.totalSeconds);
-  updateFileTtlCurrentLabel(parts.totalSeconds);
-  showBanner(el.settingsInfo, '文件有效时间已更新。');
+  applyFileTtlToUi(parts.totalSeconds);
+  showBanner(el.settingsInfo, '文件与二维码有效期已更新。');
 }
+
+// ============================================================================
+// 设置面板 - 凭证风格
+// ============================================================================
 
 function lettersEnabledForCredentialStyle(): boolean {
   return el.credentialStyleUppercase.checked || el.credentialStyleLowercase.checked;
@@ -612,6 +1371,10 @@ function handleConfirmCredentialStyle(): void {
   showBanner(el.settingsInfo, '凭证风格已更新。');
 }
 
+// ============================================================================
+// 设置面板 - Registry 连接
+// ============================================================================
+
 async function handleSaveSettings(): Promise<void> {
   clearBanner(el.settingsError);
   clearBanner(el.settingsInfo);
@@ -629,13 +1392,14 @@ async function handleSaveSettings(): Promise<void> {
 
   try {
     await reloadRuntime();
+    clearSendShare();
     showApp();
     showBanner(el.settingsInfo, '已保存并重连 Registry。');
     if (activePanel !== 'settings') {
       switchPanel('settings');
     }
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = formatUnknownError(error);
     showBanner(el.settingsError, message);
     showApp();
   }
@@ -651,6 +1415,24 @@ async function handleResetSettings(): Promise<void> {
   showBanner(el.settingsInfo, '已恢复默认（尚未重连，请点击保存并重连）。');
 }
 
+async function pasteReceiveCredential(): Promise<void> {
+  clearBanner(el.receiveError);
+  try {
+    const text = await navigator.clipboard.readText();
+    if (!text.trim()) {
+      showBanner(el.receiveError, '剪贴板为空，请先在发送页复制凭证');
+      return;
+    }
+    receiveCredentialInput?.applyCredential(text);
+    if (!receiveCredentialInput?.isComplete()) {
+      showBanner(el.receiveError, `剪贴板内容不足 ${CREDENTIAL_LENGTH} 位有效凭证字符`);
+      return;
+    }
+  } catch {
+    showBanner(el.receiveError, '无法读取剪贴板，请在凭证框内 Ctrl+V 粘贴');
+  }
+}
+
 async function copyCredential(): Promise<void> {
   const value = credentialDisplay?.getValue();
   if (!value) {
@@ -659,6 +1441,81 @@ async function copyCredential(): Promise<void> {
   await navigator.clipboard.writeText(value);
   showBanner(el.sendInfo, '凭证已复制到剪贴板。');
 }
+
+async function copyReceiveLink(): Promise<void> {
+  const state = sendShareState;
+  if (!state) {
+    return;
+  }
+
+  clearBanner(el.sendError);
+  try {
+    await copyShareText(state.receiveUrl);
+    el.copyReceiveLinkBtn.textContent = '已复制';
+    window.setTimeout(() => {
+      if (sendShareState === state) {
+        el.copyReceiveLinkBtn.textContent = '复制接收链接';
+      }
+    }, 1600);
+  } catch (error) {
+    showBanner(el.sendError, `复制接收链接失败：${formatUnknownError(error)}`);
+  }
+}
+
+function downloadReceiveQr(): void {
+  if (!sendShareState) {
+    return;
+  }
+  clearBanner(el.sendError);
+  try {
+    downloadQrSvg(el.sendShareQr);
+  } catch (error) {
+    showBanner(el.sendError, `保存二维码失败：${formatUnknownError(error)}`);
+  }
+}
+
+function clearConsumedReceiveHash(): void {
+  const cleanUrl = new URL(window.location.href);
+  cleanUrl.hash = '';
+  window.history.replaceState(window.history.state, '', cleanUrl.toString());
+}
+
+async function consumeReceiveLinkIntent(): Promise<void> {
+  if (receiveIntentConsumed) {
+    return;
+  }
+
+  const intent = parseReceiveIntent(window.location.hash);
+  if (intent.kind === 'none') {
+    return;
+  }
+
+  receiveIntentConsumed = true;
+  clearConsumedReceiveHash();
+  switchPanel('receive');
+
+  if (intent.kind === 'invalid') {
+    showBanner(el.receiveError, '接收链接无效或已损坏，请让发送方重新生成二维码。');
+    return;
+  }
+
+  receiveCredentialInput?.applyCredential(intent.credential);
+  if (!receiveCredentialInput?.isComplete()) {
+    showBanner(el.receiveError, '接收链接中的凭证无效，请让发送方重新生成二维码。');
+    return;
+  }
+
+  if (intent.autoDownload) {
+    await handleReceiveDownload({ autoSave: true });
+    return;
+  }
+
+  el.receiveDownloadBtn.focus();
+}
+
+// ============================================================================
+// 事件绑定
+// ============================================================================
 
 function bindEvents(): void {
   el.navItems.forEach((item) => {
@@ -708,6 +1565,23 @@ function bindEvents(): void {
     handleConfirmFileTtl();
   });
 
+  el.sendTtlSlider.addEventListener('input', () => {
+    handleSendTtlSliderInput();
+  });
+
+  for (const tick of el.sendTtlTicks) {
+    tick.addEventListener('click', () => {
+      if (sendInProgress) {
+        return;
+      }
+      const index = Number(tick.dataset.ttlPresetIndex);
+      if (!Number.isFinite(index)) {
+        return;
+      }
+      applyFileTtlPresetIndex(index);
+    });
+  }
+
   el.confirmCredentialStyleBtn.addEventListener('click', () => {
     handleConfirmCredentialStyle();
   });
@@ -730,7 +1604,15 @@ function bindEvents(): void {
     });
   }
 
+  const debouncedSyncTtl = debounce(() => {
+    const parts = readDurationInputs();
+    applyDurationPartsToInputs(parts);
+  }, 200);
+
   for (const input of [el.fileTtlHoursInput, el.fileTtlMinutesInput, el.fileTtlSecondsInput]) {
+    input.addEventListener('input', () => {
+      debouncedSyncTtl();
+    });
     input.addEventListener('change', () => {
       const parts = readDurationInputs();
       applyDurationPartsToInputs(parts);
@@ -739,6 +1621,18 @@ function bindEvents(): void {
 
   el.copyCredentialBtn.addEventListener('click', () => {
     void copyCredential();
+  });
+
+  el.copyReceiveLinkBtn.addEventListener('click', () => {
+    void copyReceiveLink();
+  });
+
+  el.downloadReceiveQrBtn.addEventListener('click', () => {
+    downloadReceiveQr();
+  });
+
+  el.pasteReceiveCredentialBtn.addEventListener('click', () => {
+    void pasteReceiveCredential();
   });
 }
 
@@ -749,9 +1643,13 @@ export async function startApp(): Promise<void> {
   receiveCredentialInput = new ReceiveCredentialInput(el.receiveCredentialSlots);
   receiveCredentialInput.onChange(() => {
     resetReceiveFileBar();
+    if (!receiveDownloading) {
+      setReceiveDownloadProgress(null);
+    }
     updateReceiveDownloadButton();
     clearBanner(el.receiveError);
   });
+  clearSendShare();
   resetReceiveFileBar();
   updateReceiveDownloadButton();
   syncFileTtlSettingsUi();
@@ -763,8 +1661,9 @@ export async function startApp(): Promise<void> {
     await reloadRuntime();
     setBootProgress(1, '就绪');
     showApp();
+    await consumeReceiveLinkIntent();
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = formatUnknownError(error);
     el.bootStatus.textContent = `启动失败：${message}`;
     el.bootProgressBar.style.width = '0%';
   }

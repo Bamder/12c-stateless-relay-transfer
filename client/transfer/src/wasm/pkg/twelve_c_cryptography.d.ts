@@ -4,12 +4,59 @@ export interface TwelveCWasmUploadEntry {
   data: Uint8Array;
 }
 
+export interface TwelveCWasmUploadPrepareSession {
+  feed(chunk: Uint8Array): void;
+  takeReadyBlocks(): TwelveCWasmUploadEntry[];
+  finalize(): TwelveCWasmUploadEntry;
+}
+
+export interface TwelveCWasmReceiveDecryptSession {
+  addWireToken(tokenIndex: number, wireData: Uint8Array): void;
+  finalize(): Uint8Array;
+  completeFinalize(): void;
+  plaintextByteLength(): number;
+  paddedPlaintextLength(): number;
+  originalFileLength(): number;
+  takePlaintextChunk(maxBytes: number): Uint8Array;
+}
+
 export interface TwelveCWasmModule {
   prepareUpload(
     filePlaintext: Uint8Array,
     credential: string,
-    originalFileName?: string,
+    originalFileName: string,
+    segmentCode: number,
+    maxWireBlockBytes: number,
   ): TwelveCWasmUploadEntry[];
+
+  UploadPrepareSession: {
+    feed(chunk: Uint8Array): void;
+    takeReadyBlocks(): TwelveCWasmUploadEntry[];
+    finalize(): TwelveCWasmUploadEntry;
+  };
+
+  createUploadPrepareSession(
+    credential: string,
+    originalFileName: string,
+    filePlaintextSize: number,
+    segmentCode: number,
+    maxWireBlockBytes: number,
+  ): TwelveCWasmUploadPrepareSession;
+
+  ReceiveDecryptSession: {
+    addWireToken(tokenIndex: number, wireData: Uint8Array): void;
+    finalize(): Uint8Array;
+    completeFinalize(): void;
+    plaintextByteLength(): number;
+    paddedPlaintextLength(): number;
+    originalFileLength(): number;
+    takePlaintextChunk(maxBytes: number): Uint8Array;
+  };
+
+  createReceiveDecryptSession(
+    credential: string,
+    token0Wire: Uint8Array,
+  ): TwelveCWasmReceiveDecryptSession;
 
   receiveFromUploadMap(
     credential: string,
@@ -27,6 +74,7 @@ export interface TwelveCWasmModule {
     ciphertextLength: number;
     originalFileLength: number;
     originalFileName: string;
+    segmentCode: number;
   };
 }
 

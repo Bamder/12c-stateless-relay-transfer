@@ -52,6 +52,19 @@ def normalize_hash(block_hash: str) -> str:
 class ResolveRouteResult:
     token: str
     targets: tuple[RelayTarget, ...]
+    resolve_status: str = "ready"
+
+
+@dataclass(frozen=True)
+class ReserveUploadOutcome:
+    routes: list[ResolveRouteResult]
+    granted_ttl_seconds: int
+    requested_ttl_seconds: int
+    degraded: bool
+    stripe_count: int
+    replica_factor: int
+    ideal_relay_count: int
+    actual_relay_count: int
 
 
 @dataclass(frozen=True)
@@ -131,13 +144,36 @@ class RegistryService:
         self,
         tokens: list[str],
     ) -> list[ResolveRouteResult]:
+        statuses = {
+            token: await self._repository.classify_token_resolve_status(token)
+            for token in tokens
+        }
         await self._repository.purge_expired_tokens()
         results: list[ResolveRouteResult] = []
 
         for token in tokens:
             resolved = await self._repository.get_resolve_targets(token)
-            results.append(await self._resolve_download(token, resolved))
+            if resolved is None:
+                results.append(
+                    ResolveRouteResult(
+                        token=token,
+                        targets=(),
+                        resolve_status=statuses[token],
+                    ),
+                )
+                continue
+            results.append(
+                ResolveRouteResult(
+                    token=token,
+                    targets=resolved.targets,
+                    resolve_status="ready",
+                ),
+            )
 
+        await self._repository.record_token_resolution_event(
+            token_count=len(tokens),
+            resolved_count=sum(1 for item in results if item.targets),
+        )
         return results
 
     async def _resolve_download(
@@ -146,10 +182,11 @@ class RegistryService:
         resolved: TokenReserveResult | None,
     ) -> ResolveRouteResult:
         if resolved is None:
-            return ResolveRouteResult(token=token, targets=())
+            return ResolveRouteResult(token=token, targets=(), resolve_status="unavailable")
         return ResolveRouteResult(
             token=token,
             targets=resolved.targets,
+            resolve_status="ready",
         )
 
     async def reserve_upload_blocks(
@@ -180,6 +217,7 @@ class RegistryService:
             ResolveRouteResult(
                 token=route.token,
                 targets=route.targets,
+                resolve_status="ready",
             )
             for route in outcome.routes
         ]
@@ -206,8 +244,17 @@ class RegistryService:
         if placement is None or not self._repository.is_placement_live(placement):
             raise HTTPException(status_code=404, detail="token not reserved or expired")
 
-        if placement.relay_base_url.rstrip("/") != relay_base_url.rstrip("/"):
-            raise HTTPException(status_code=403, detail="token bound to another relay")
+        # Bind by relay_id; Public URL may change after reserve. Reported URL must
+        # match the current canonical allowlist/state URL (caller usually pre-checks).
+        canonical = await self._repository.get_canonical_relay_base_url(relay_id)
+        if (
+            canonical is None
+            or canonical.rstrip("/") != relay_base_url.rstrip("/")
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail="token bound to another relay",
+            )
 
         if placement.block_hash != block_hash:
             raise HTTPException(
@@ -382,6 +429,11 @@ class RegistryService:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         if not deleted:
             raise HTTPException(status_code=404, detail="row not found")
+        await self._repository.record_admin_event(
+            action="admin_db_delete",
+            target_table=table,
+            keys=keys,
+        )
 
     async def add_allowlist_entry(
         self,
@@ -391,11 +443,17 @@ class RegistryService:
     ) -> AllowlistRecord:
         normalized_id = _normalize_relay_id(relay_id)
         normalized_url = _normalize_relay_base_url(relay_base_url)
-        return await self._repository.upsert_allowlist_entry(
+        record = await self._repository.upsert_allowlist_entry(
             relay_id=normalized_id,
             relay_base_url=normalized_url,
             enabled=True,
         )
+        await self._repository.record_admin_event(
+            action="allowlist_upsert",
+            target_table="registry_allowlist",
+            keys={"relay_id": normalized_id},
+        )
+        return record
 
     async def patch_allowlist_entry(
         self,
@@ -415,6 +473,11 @@ class RegistryService:
         )
         if record is None:
             raise HTTPException(status_code=404, detail="allowlist entry not found")
+        await self._repository.record_admin_event(
+            action="allowlist_patch",
+            target_table="registry_allowlist",
+            keys={"relay_id": normalized_id},
+        )
         return record
 
     async def remove_allowlist_entry(self, relay_id: str) -> None:
@@ -422,6 +485,11 @@ class RegistryService:
         deleted = await self._repository.delete_allowlist_entry(normalized_id)
         if not deleted:
             raise HTTPException(status_code=404, detail="allowlist entry not found")
+        await self._repository.record_admin_event(
+            action="allowlist_delete",
+            target_table="registry_allowlist",
+            keys={"relay_id": normalized_id},
+        )
 
     async def submit_registration_request(
         self,
@@ -539,6 +607,11 @@ class RegistryService:
             normalized_install,
             relay_id=assigned_id,
         )
+        await self._repository.record_admin_event(
+            action="registration_approve",
+            target_table="relay_registration_requests",
+            keys={"install_id": normalized_install, "relay_id": assigned_id},
+        )
         return entry
 
     async def ignore_registration_request(self, install_id: str) -> None:
@@ -557,6 +630,11 @@ class RegistryService:
         )
         if updated is None:
             raise HTTPException(status_code=404, detail="registration request not found")
+        await self._repository.record_admin_event(
+            action="registration_ignore",
+            target_table="relay_registration_requests",
+            keys={"install_id": normalized_install},
+        )
 
     async def process_heartbeat(
         self,
@@ -594,6 +672,14 @@ class RegistryService:
             storage_rate=storage_rate,
             block_max_age_seconds=block_max_age_seconds,
             block_sweep_interval_seconds=block_sweep_interval_seconds,
+        )
+        await self._repository.record_heartbeat_event(
+            relay_id=relay_id,
+            relay_base_url=canonical_url,
+            status=status,
+            stored_blocks=stored_blocks,
+            max_blocks=max_blocks,
+            storage_rate=storage_rate,
         )
 
         if registry_api_key_id is None or registry_api_key is None:

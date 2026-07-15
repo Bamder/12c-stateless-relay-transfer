@@ -237,12 +237,26 @@
         填充本地监听地址
       </button>
       <p class="dialog-note">
-        保存后需重启 Relay 才会在运行进程中生效。若已分配 Relay ID，将尝试同步更新 Registry Allowlist。
+        保存后将按所选方式重启 Relay 使新地址生效。若已分配 Relay ID，将尝试同步更新 Registry Allowlist。
       </p>
       <div class="dialog-actions dialog-actions-split">
         <button type="button" value="cancel" class="ghost-btn">取消</button>
-        <button type="submit" value="confirm" class="primary-btn">保存</button>
+        <button type="submit" value="confirm" class="primary-btn">保存并重启</button>
       </div>
+      <fieldset class="dialog-restart-mode">
+        <legend>重启方式</legend>
+        <div id="relay-restart-mode-control" class="segmented-control" role="radiogroup" aria-label="重启方式">
+          <span class="segmented-slider" aria-hidden="true"></span>
+          <label class="segmented-option">
+            <input type="radio" name="restartMode" value="managed" checked />
+            <span>托管进程</span>
+          </label>
+          <label class="segmented-option">
+            <input type="radio" name="restartMode" value="detached" />
+            <span>独立进程</span>
+          </label>
+        </div>
+      </fieldset>
     </form>
   </dialog>
 

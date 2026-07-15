@@ -100,7 +100,7 @@ async def test_lock_tokens_rejects_occupied_primary(
 
 
 @pytest.mark.asyncio
-async def test_resolve_targets_prefers_primary_and_includes_replica(
+async def test_resolve_targets_orders_by_lowest_storage_rate(
     repository: RegistryRepository,
 ) -> None:
     await repository.lock_tokens_with_block_hashes([("token-0", "hash-0")])
@@ -108,6 +108,40 @@ async def test_resolve_targets_prefers_primary_and_includes_replica(
     assert resolved is not None
     assert primary_url(resolved) == "http://a.test"
     assert len(resolved.targets) == 2
+    # primary a (0.1) is lighter than replica b (0.2) → preferred first
     assert resolved.targets[0].role == "primary"
+    assert resolved.targets[0].relay_base_url == "http://a.test"
     assert resolved.targets[1].role == "replica"
     assert resolved.targets[1].relay_base_url == "http://b.test"
+
+
+@pytest.mark.asyncio
+async def test_resolve_targets_prefers_lighter_replica_over_busy_primary(
+    repository: RegistryRepository,
+) -> None:
+    await repository.lock_tokens_with_block_hashes([("token-0", "hash-0")])
+    # Make primary a busier than replica b so read steering prefers the replica.
+    await repository.upsert_relay_state(
+        relay_id="relay-a",
+        relay_base_url="http://a.test",
+        status="ok",
+        stored_blocks=900,
+        max_blocks=1000,
+        storage_rate=0.9,
+    )
+    await repository.upsert_relay_state(
+        relay_id="relay-b",
+        relay_base_url="http://b.test",
+        status="ok",
+        stored_blocks=50,
+        max_blocks=1000,
+        storage_rate=0.05,
+    )
+
+    resolved = await repository.get_resolve_targets("token-0")
+    assert resolved is not None
+    assert len(resolved.targets) == 2
+    assert resolved.targets[0].role == "replica"
+    assert resolved.targets[0].relay_base_url == "http://b.test"
+    assert resolved.targets[1].role == "primary"
+    assert resolved.targets[1].relay_base_url == "http://a.test"

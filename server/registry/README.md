@@ -65,12 +65,14 @@ registry_server/
   "routes": [{
     "token": "...",
     "targets": [
-      { "role": "primary", "relayId": "relay-a", "relayBaseUrl": "http://..." },
-      { "role": "replica", "relayId": "relay-c", "relayBaseUrl": "http://..." }
+      { "role": "replica", "relayId": "relay-c", "relayBaseUrl": "http://..." },
+      { "role": "primary", "relayId": "relay-a", "relayBaseUrl": "http://..." }
     ]
   }]
 }
 ```
+
+`targets` 按单 token **读导流**排序：健康且未过期的持有者中，`storage_rate` 升序（最闲优先）；同负载时 primary 优先。客户端应把首个 target 作为首选 GET，其余作为 failover。仍要求至少有一个 live primary，否则该 token 不可解析。
 
 ### 上传路由
 
@@ -150,6 +152,28 @@ Canonical 串：`12C-BLOCK-AUTH-v1|keyId|token|relayId|relayBaseUrl|blockHash|ex
 | `GET` | `/api/admin/db` | 各 SQLite 表浏览（敏感字段脱敏） |
 
 控制面板见 `server/console/`。
+
+## Client Web 托管
+
+Registry 同时分发 `client/web/dist/` 静态产物，使 Client 与 Registry **同源绑定**：
+
+| 路径 | 说明 |
+|------|------|
+| `/` | Client Web（`index.html` + SPA 回退） |
+| `/relay.config.json` | 动态生成，Registry URL 为当前访问来源（支持 `X-Forwarded-*`） |
+| `/api/relay/*` | Registry API（优先于静态路由） |
+| `/health` | 健康检查；含 `clientDistReady` 字段 |
+
+配置项 `clientStaticDir`（默认 `../../client/web/dist`）；设为 `false` 可禁用托管。
+如果反向代理把 Registry 挂载到子路径，请同时转发
+`X-Forwarded-Prefix`（例如 `/services/registry`），动态配置和二维码会保留该前缀。
+
+构建 Client 后重启 Registry：
+
+```powershell
+cd client
+.\build.ps1 -Production
+```
 
 ## 运行
 

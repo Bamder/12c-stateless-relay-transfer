@@ -9,7 +9,7 @@ from ..services.registry import ResolveRouteResult
 
 
 def serialize_route(route: ResolveRouteResult) -> dict[str, object]:
-    return {
+    payload: dict[str, object] = {
         "token": route.token,
         "targets": [
             {
@@ -20,6 +20,9 @@ def serialize_route(route: ResolveRouteResult) -> dict[str, object]:
             for target in route.targets
         ],
     }
+    if route.resolve_status != "ready":
+        payload["resolveStatus"] = route.resolve_status
+    return payload
 
 
 def _extract_admin_api_key(

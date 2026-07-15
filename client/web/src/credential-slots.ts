@@ -1,7 +1,9 @@
 import { CREDENTIAL_LENGTH } from '@stateless-relay/transfer';
 
 const WAITING_TEXT = 'WAITING4-12C';
-const BREATHING_MIN_MS = 900;
+export const BREATHING_MIN_MS = 900;
+/** 流式大文件：缩短 WAITING 呼吸，尽快进入滚筒阶段并保持至 reveal */
+export const BREATHING_MIN_STREAMING_MS = 280;
 const REEL_SPIN_INTERVAL_MS = 70;
 const REVEAL_STEP_MS = 70;
 

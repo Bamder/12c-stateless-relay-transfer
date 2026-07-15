@@ -88,6 +88,10 @@ server/**/*.db-shm
 
 # --- Native C++ 本地编译 scratch (client/core/12c_file_transfer_scheme) ---------
 
+client/core/12c_file_transfer_scheme/build/
+client/core/12c_file_transfer_scheme/build-native/
+client/core/12c_file_transfer_scheme/build-native-test/
+client/core/12c_file_transfer_scheme/12c_cryptography/build-native/
 build-test/
 
 # Client 构建脚本（*.ps1 / *.sh / copy-wasm.mjs）须纳入版本库，见 client/README.md
@@ -106,3 +110,4 @@ client/core/twelve_c_wasm/third_party/*.zip
 *.tmp
 *.temp
 .cache/
+*.posf

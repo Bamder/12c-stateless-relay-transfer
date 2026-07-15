@@ -21,10 +21,25 @@ inline constexpr std::size_t kGcmTagBytes = 16;
 
 inline constexpr std::size_t kGcmEnvelopeBytes = kGcmNonceBytes + kGcmTagBytes;
 
-/** 单块 wire 上限（与 Relay maxBodyBytes 对齐）。 */
-inline constexpr std::size_t kMaxWireBlockBytes = 16 * 1024 * 1024;
+/** 保守 wire 块上限（移动端 / 小文件策略档）。 */
+inline constexpr std::size_t kConservativeWireBlockBytesCap = 16 * 1024 * 1024;
 
-/** 块大小下限 = min(kMaxWireBlockBytes, total_wire / kMinBlockSizeDivisor)。 */
+/** Relay 部署默认 body 上限（与 maxBodyBytes 默认对齐）。 */
+inline constexpr std::size_t kDefaultRelayMaxBodyBytes = 32 * 1024 * 1024;
+
+/** 规范允许的最大 Relay body 上限（实现硬顶）。 */
+inline constexpr std::size_t kRelayMaxBodyBytesCap = 32 * 1024 * 1024;
+
+/**
+ * 未显式传入 max_wire_block_bytes 时的布局默认档。
+ * 保持 16 MiB 以兼容既有 native / WASM 调用方。
+ */
+inline constexpr std::size_t kDefaultWireBlockBytesCap = kConservativeWireBlockBytesCap;
+
+/** @deprecated 使用 kDefaultWireBlockBytesCap 或运行时 max_wire_block_bytes。 */
+inline constexpr std::size_t kMaxWireBlockBytes = kDefaultWireBlockBytesCap;
+
+/** 块大小下限 = min(max_wire_block_bytes, total_wire / kMinBlockSizeDivisor)。 */
 inline constexpr std::size_t kMinBlockSizeDivisor = 8;
 
 /** 目标 Token 数参考切分（用于 m 软下限，实际受块大小约束截断）。 */
@@ -33,7 +48,7 @@ inline constexpr std::size_t kWireBlockRef = 4 * 1024 * 1024;
 /** 在 [m_min, m_max] 内优先微调 m 使 total 整除（首选窗口）。 */
 inline constexpr std::size_t kMaxTokenAdjust = 256;
 
-/** 找不到整除 m 时，尝试追加的明文零填充上限（对齐 16MB 块边界，最坏约一条块大小）。 */
+/** 找不到整除 m 时，尝试追加的明文零填充上限（对齐块边界，最坏约一条块大小）。 */
 inline constexpr std::size_t kMaxPlaintextPaddingForWireLayout = 16 * 1024 * 1024;
 
 inline constexpr std::uint32_t kSmbMagic = 0x31433232;  // "12C2"

@@ -3,14 +3,15 @@ $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
 
 $Python = Join-Path $PSScriptRoot ".venv\Scripts\python.exe"
-$Pip = Join-Path $PSScriptRoot ".venv\Scripts\pip.exe"
-
 if (-not (Test-Path $Python)) {
     Write-Host "Creating virtual environment..."
     python -m venv .venv
 }
 
-& $Pip install -r requirements.txt -q
+& $Python -m pip install -r requirements.txt -q
+if ($LASTEXITCODE -ne 0) {
+    throw "Console dependency installation failed. Check pip proxy and index settings above."
+}
 
 if (-not (Test-Path "console_server.config.json")) {
     Copy-Item "console_server.config.example.json" "console_server.config.json"

@@ -3,6 +3,7 @@
 #include "twelve_c/constants.hpp"
 #include "twelve_c/crypto.hpp"
 #include "twelve_c/merkle.hpp"
+#include "twelve_c/segment.hpp"
 #include "twelve_c/smb.hpp"
 #include "twelve_c/wire_layout.hpp"
 
@@ -75,14 +76,45 @@ UploadMap build_upload_map(
     return upload_map;
 }
 
+Bytes encrypt_payload_for_segment_code(
+    const Bytes& k_fek,
+    const Bytes& plaintext_padded,
+    const std::uint16_t segment_code) {
+    if (is_v2_whole_file_mode(segment_code)) {
+        return encrypt_payload_v2_whole_file(k_fek, plaintext_padded);
+    }
+    return encrypt_payload_v21_segmented(k_fek, plaintext_padded, segment_code);
+}
+
+std::string normalize_file_name_for_segment_code(
+    const std::string& original_file_name,
+    const std::uint16_t segment_code) {
+    std::string normalized = normalize_original_file_name(original_file_name);
+    if (is_v21_segmented_mode(segment_code) &&
+        normalized.size() > kV21FileNamePayloadBytes) {
+        normalized.resize(kV21FileNamePayloadBytes);
+        while (!normalized.empty() &&
+               (static_cast<unsigned char>(normalized.back()) & 0xC0) == 0x80) {
+            normalized.pop_back();
+        }
+    }
+    return normalized;
+}
+
 }  // namespace
 
 UploadMap prepare_upload(
     const Bytes& file_plaintext,
     const std::string& credential,
-    const std::string& original_file_name) {
+    const std::string& original_file_name,
+    const std::uint16_t segment_code,
+    const std::size_t max_wire_block_bytes) {
     const CredentialParts parts = split_credential(credential);
-    const WireLayout layout = compute_wire_layout(file_plaintext.size());
+    validate_segment_code_v21(segment_code);
+    const WireLayout layout = compute_wire_layout(
+        file_plaintext.size(),
+        segment_code,
+        max_wire_block_bytes);
 
     Bytes plaintext = file_plaintext;
     if (layout.plaintext_padding > 0) {
@@ -100,7 +132,8 @@ UploadMap prepare_upload(
         salt_rand.size()));
     const Bytes k_fek = generate_fek();
 
-    const Bytes ciphertext = encrypt(k_fek, plaintext);
+    const Bytes ciphertext =
+        encrypt_payload_for_segment_code(k_fek, plaintext, segment_code);
     if (ciphertext.size() != layout.ciphertext_length) {
         throw std::runtime_error("ciphertext length mismatch after encryption");
     }
@@ -118,7 +151,10 @@ UploadMap prepare_upload(
     metadata.wire_block_size = layout.wire_block_size;
     metadata.ciphertext_length = layout.ciphertext_length;
     metadata.original_file_length = file_plaintext.size();
-    metadata.original_file_name = normalize_original_file_name(original_file_name);
+    metadata.segment_code = segment_code;
+    metadata.original_file_name = normalize_file_name_for_segment_code(
+        original_file_name,
+        segment_code);
 
     const Bytes sm_bytes = serialize_smb(metadata);
     if (sm_bytes.size() != kSmPlainBytes) {

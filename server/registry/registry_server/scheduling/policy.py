@@ -1,3 +1,12 @@
+"""PlacementPolicy: numeric knobs for striping, replicas, and TTL grants.
+
+Loaded from registry_server.config.json (placementPolicy). Algorithm logic
+lives in the scheduling modules that take this object as input.
+
+Download single-token read steering (read_steering.py) currently uses
+heartbeat storage_rate only and does not read this config bag.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -5,7 +14,7 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class PlacementPolicy:
-    """Registry 上传布局与 TTL 降级策略（由 registry_server.config.json 注入）。"""
+    """Config for upload layout and TTL degrade limits (parameters only)."""
 
     stripe_target_relays: int
     max_file_replica_count: int

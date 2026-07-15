@@ -31,8 +31,9 @@ SmbMetadata parse_smb_encrypted(
     try {
         const Bytes sm_bytes = decrypt(k_smb, s_enc);
         return deserialize_smb(sm_bytes);
-    } catch (const std::exception&) {
-        throw std::runtime_error("SMB integrity check failed");
+    } catch (const std::exception& ex) {
+        throw std::runtime_error(
+            std::string("SMB integrity check failed: ") + ex.what());
     }
 }
 
