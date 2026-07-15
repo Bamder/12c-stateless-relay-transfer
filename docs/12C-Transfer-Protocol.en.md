@@ -2,7 +2,7 @@
 Internet-Draft (Informational)
 12C Stateless Relay Transfer Protocol
 Cryptography and Wire Format Specification
-Version 1.0
+Version 2
 July 2026
 ```
 
@@ -10,13 +10,13 @@ July 2026
 
 ## Cryptography and Wire Format Specification
 
-| | |
-|---|---|
-| Document | 12C-Transfer-Protocol |
-| Version | 1.0 |
-| Date | July 2026 |
-| Category | Informational |
-| Scope | On-wire cryptography and object layout |
+|          |                                        |
+| -------- | -------------------------------------- |
+| Document | 12C-Transfer-Protocol                  |
+| Version  | 2                                      |
+| Date     | July 2026                              |
+| Category | Informational                          |
+| Scope    | On-wire cryptography and object layout |
 
 ---
 
@@ -58,6 +58,7 @@ Implementations claiming **V2** conformance MUST support `segment_code = 0`. Imp
 13. [Security Considerations](#13-security-considerations)
 14. [IANA Considerations](#14-iana-considerations)
 15. [Normative References](#15-normative-references)
+
 - [Appendix A. Protocol Constants](#appendix-a-protocol-constants)
 - [Appendix B. Wire Layout Algorithm](#appendix-b-wire-layout-algorithm)
 - [Appendix C. Informative Guidance](#appendix-c-informative-guidance)
@@ -93,18 +94,18 @@ Out of scope: blob upload/download protocols, replication, TTL policy, TLS usage
 
 ## 2. Terminology
 
-| Term | Definition |
-|------|------------|
-| Credential | 12-character code: 6-character search code + 6-character key code |
-| SMB | Super Metadata Block; 345-octet fixed metadata |
-| S_enc | SMB plaintext encrypted with K_smb; 373 octets |
-| Token | 64-character lowercase hex identifier labeling one wire blob |
-| Wire blob | Octet string stored under one token |
-| Segment | (V2.1) Plaintext range encrypted by one GCM invocation |
-| FEK | 32-octet random file encryption key |
-| KEK | 32-octet key derived from key code and salt_rand; encrypts FEK |
-| Logical block | One fragment B_i of payload ciphertext before wire packing |
-| segment_code | 16-bit field selecting V2 vs V2.1 segment size |
+| Term          | Definition                                                        |
+| ------------- | ----------------------------------------------------------------- |
+| Credential    | 12-character code: 6-character search code + 6-character key code |
+| SMB           | Super Metadata Block; 345-octet fixed metadata                    |
+| S_enc         | SMB plaintext encrypted with K_smb; 373 octets                    |
+| Token         | 64-character lowercase hex identifier labeling one wire blob      |
+| Wire blob     | Octet string stored under one token                               |
+| Segment       | (V2.1) Plaintext range encrypted by one GCM invocation            |
+| FEK           | 32-octet random file encryption key                               |
+| KEK           | 32-octet key derived from key code and salt_rand; encrypts FEK    |
+| Logical block | One fragment B_i of payload ciphertext before wire packing        |
+| segment_code  | 16-bit field selecting V2 vs V2.1 segment size                    |
 
 ---
 
@@ -167,12 +168,12 @@ Receivers MUST reject credentials whose length is not exactly 12 characters.
 
 ### 5.1. Symmetric Encryption
 
-| Parameter | Value |
-|-----------|-------|
-| Algorithm | AES-256-GCM |
-| Key width | 256 bits (32 octets) |
-| Nonce width | 96 bits (12 octets), fresh per encryption |
-| Tag width | 128 bits (16 octets) |
+| Parameter         | Value                                               |
+| ----------------- | --------------------------------------------------- |
+| Algorithm         | AES-256-GCM                                         |
+| Key width         | 256 bits (32 octets)                                |
+| Nonce width       | 96 bits (12 octets), fresh per encryption           |
+| Tag width         | 128 bits (16 octets)                                |
 | Envelope overhead | 28 octets (nonce and tag; excludes ciphertext body) |
 
 ### 5.2. GCM Record Format
@@ -197,11 +198,11 @@ SlowKDF(password, salt, iter, len) = PBKDF2-HMAC-SHA256(
     password, salt, iter, len)
 ```
 
-| Key | Derivation |
-|-----|------------|
-| K_smb | SlowKDF(key_code, SALT_SMB, 100000, 32) |
+| Key   | Derivation                               |
+| ----- | ---------------------------------------- |
+| K_smb | SlowKDF(key_code, SALT_SMB, 100000, 32)  |
 | K_kek | SlowKDF(key_code, salt_rand, 100000, 32) |
-| K_fek | 32 octets uniformly random |
+| K_fek | 32 octets uniformly random               |
 
 Normative salt for K_smb:
 
@@ -254,13 +255,13 @@ SMB is a **fixed sequential schema** (header-like layout), not a self-describing
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 ```
 
-| Offset | Size | Field | Semantics |
-|--------|------|-------|-----------|
-| 0 | 4 | magic | MUST be `0x31433232` |
-| 4 | 1 | version | MUST be `2` |
-| 5 | 272 | body | [Section 6.2](#62-body-fields) |
-| 277 | 36 | body_hash | `u32_be(32)` \|\| SHA-256(body) |
-| 313 | 32 | payload_hash | SHA-256(octets[0:313]) |
+| Offset | Size | Field        | Semantics                         |
+| ------ | ---- | ------------ | --------------------------------- |
+| 0      | 4    | magic        | MUST be`0x31433232`             |
+| 4      | 1    | version      | MUST be`2`                      |
+| 5      | 272  | body         | [Section 6.2](#62-body-fields)     |
+| 277    | 36   | body_hash    | `u32_be(32)` \|\| SHA-256(body) |
+| 313    | 32   | payload_hash | SHA-256(octets[0:313])            |
 
 **Validation:**
 
@@ -272,16 +273,16 @@ SMB is a **fixed sequential schema** (header-like layout), not a self-describing
 
 ### 6.2. Body Fields
 
-| # | Field | Encoding |
-|---|-------|----------|
-| 1 | root_hash | `u32_be(32)` \|\| 32 octets |
-| 2 | encrypted_fek | `u32_be(60)` \|\| GCM record encrypting FEK |
-| 3 | salt_rand | `u32_be(16)` \|\| 16 octets |
-| 4 | num_tokens | u32_be |
-| 5 | wire_block_size | u32_be |
-| 6 | ciphertext_length | u64_be |
-| 7 | original_file_length | u64_be |
-| 8 | file_name_slot | 128 octets; [Section 6.4](#64-file-name-slot-and-segment_code) |
+| # | Field                | Encoding                                                     |
+| - | -------------------- | ------------------------------------------------------------ |
+| 1 | root_hash            | `u32_be(32)` \|\| 32 octets                                |
+| 2 | encrypted_fek        | `u32_be(60)` \|\| GCM record encrypting FEK                |
+| 3 | salt_rand            | `u32_be(16)` \|\| 16 octets                                |
+| 4 | num_tokens           | u32_be                                                       |
+| 5 | wire_block_size      | u32_be                                                       |
+| 6 | ciphertext_length    | u64_be                                                       |
+| 7 | original_file_length | u64_be                                                       |
+| 8 | file_name_slot       | 128 octets;[Section 6.4](#64-file-name-slot-and-segment_code) |
 
 ### 6.3. Encrypted SMB Placement
 
@@ -314,15 +315,15 @@ When octets `[120, 128)` are all zero, `segment_code` is **0** (V2 whole-file mo
 
 **segment_code registry:**
 
-| Code | Edition | Segment plaintext size |
-|------|---------|------------------------|
-| 0 | V2 | (whole padded plaintext) |
-| 1 | V2.1 | 2^4 MiB = 16 MiB |
-| 2 | V2.1 | 2^5 MiB = 32 MiB |
-| 3 | V2.1 | 2^6 MiB = 64 MiB |
-| 4 | V2.1 | 2^7 MiB = 128 MiB |
-| 5 | V2.1 | 2^8 MiB = 256 MiB |
-| other | — | MUST be rejected |
+| Code  | Edition | Segment plaintext size   |
+| ----- | ------- | ------------------------ |
+| 0     | V2      | (whole padded plaintext) |
+| 1     | V2.1    | 2^4 MiB = 16 MiB         |
+| 2     | V2.1    | 2^5 MiB = 32 MiB         |
+| 3     | V2.1    | 2^6 MiB = 64 MiB         |
+| 4     | V2.1    | 2^7 MiB = 128 MiB        |
+| 5     | V2.1    | 2^8 MiB = 256 MiB        |
+| other | —      | MUST be rejected         |
 
 For code ≥ 1:
 
@@ -395,11 +396,11 @@ total_wire = SMB_ENC_SIZE + ciphertext_length
 
 ### 8.2. Variables
 
-| Symbol | SMB source | Meaning |
-|--------|------------|---------|
-| m | num_tokens | Token count |
-| B | wire_block_size | Size of Token[1..m-1] |
-| B_m | derived | Length of final logical ciphertext block |
+| Symbol | SMB source      | Meaning                                  |
+| ------ | --------------- | ---------------------------------------- |
+| m      | num_tokens      | Token count                              |
+| B      | wire_block_size | Size of Token[1..m-1]                    |
+| B_m    | derived         | Length of final logical ciphertext block |
 
 **Constraints:**
 
@@ -519,19 +520,19 @@ Receivers MUST fail if:
 
 ## 12. Protocol Editions
 
-| Edition | segment_code | Payload encryption |
-|---------|--------------|-------------------|
-| V2 | 0 | [Section 7.2](#72-edition-v2--whole-file-mode) |
-| V2.1 | 1..5 | [Section 7.3](#73-edition-v21--segmented-mode) |
+| Edition | segment_code | Payload encryption                            |
+| ------- | ------------ | --------------------------------------------- |
+| V2      | 0            | [Section 7.2](#72-edition-v2--whole-file-mode) |
+| V2.1    | 1..5         | [Section 7.3](#73-edition-v21--segmented-mode) |
 
 **Compatibility:**
 
-| Scenario | Requirement |
-|----------|-------------|
-| V2.1 peer reads V2 object | MUST succeed |
+| Scenario                  | Requirement                  |
+| ------------------------- | ---------------------------- |
+| V2.1 peer reads V2 object | MUST succeed                 |
 | V2 peer reads V2.1 object | MUST fail (upgrade required) |
-| V2.1 SMB `version` | MUST remain 2 |
-| SMB / S_enc sizes | MUST remain 345 / 373 |
+| V2.1 SMB`version`       | MUST remain 2                |
+| SMB / S_enc sizes         | MUST remain 345 / 373        |
 
 ---
 
@@ -575,39 +576,39 @@ The `segment_code` values 0..5 are defined in [Section 6.4.2](#642-edition-v21-s
 
 ## Appendix A. Protocol Constants
 
-| Name | Value |
-|------|-------|
-| CREDENTIAL_LENGTH | 12 |
-| SEARCH_CODE_LENGTH | 6 |
-| KEY_CODE_LENGTH | 6 |
-| SMB_MAGIC | 0x31433232 |
-| SMB_VERSION | 2 |
-| SMB_PLAIN_SIZE | 345 |
-| SMB_ENC_SIZE | 373 |
-| FILE_NAME_SLOT_SIZE | 128 |
-| FILE_NAME_PAYLOAD_V21 | 120 |
-| SEGMENT_CODE_OFFSET | 120 |
-| GCM_NONCE_SIZE | 12 |
-| GCM_TAG_SIZE | 16 |
-| GCM_ENVELOPE_SIZE | 28 |
-| HASH_SIZE | 32 |
-| SALT_RAND_SIZE | 16 |
-| KEY_SIZE | 32 |
-| PBKDF2_ITERATIONS | 100000 |
-| MAX_WIRE_BLOCK_SIZE | 16 777 216 (16 MiB) |
-| WIRE_BLOCK_REF_SIZE | 4 194 304 (4 MiB) |
-| MIN_BLOCK_DIVISOR | 8 |
-| MAX_TOKEN_SEARCH_WINDOW | 256 |
-| MAX_PLAINTEXT_PADDING | 16 777 216 (16 MiB) |
-| TOKEN_HEX_LENGTH | 64 |
-| SALT_SMB | "12C-v2-KEY-SALT" |
-| SALT_TOKEN | "12C-v2-SEARCH-SALT" |
+| Name                    | Value                |
+| ----------------------- | -------------------- |
+| CREDENTIAL_LENGTH       | 12                   |
+| SEARCH_CODE_LENGTH      | 6                    |
+| KEY_CODE_LENGTH         | 6                    |
+| SMB_MAGIC               | 0x31433232           |
+| SMB_VERSION             | 2                    |
+| SMB_PLAIN_SIZE          | 345                  |
+| SMB_ENC_SIZE            | 373                  |
+| FILE_NAME_SLOT_SIZE     | 128                  |
+| FILE_NAME_PAYLOAD_V21   | 120                  |
+| SEGMENT_CODE_OFFSET     | 120                  |
+| GCM_NONCE_SIZE          | 12                   |
+| GCM_TAG_SIZE            | 16                   |
+| GCM_ENVELOPE_SIZE       | 28                   |
+| HASH_SIZE               | 32                   |
+| SALT_RAND_SIZE          | 16                   |
+| KEY_SIZE                | 32                   |
+| PBKDF2_ITERATIONS       | 100000               |
+| MAX_WIRE_BLOCK_SIZE     | 16 777 216 (16 MiB)  |
+| WIRE_BLOCK_REF_SIZE     | 4 194 304 (4 MiB)    |
+| MIN_BLOCK_DIVISOR       | 8                    |
+| MAX_TOKEN_SEARCH_WINDOW | 256                  |
+| MAX_PLAINTEXT_PADDING   | 16 777 216 (16 MiB)  |
+| TOKEN_HEX_LENGTH        | 64                   |
+| SALT_SMB                | "12C-v2-KEY-SALT"    |
+| SALT_TOKEN              | "12C-v2-SEARCH-SALT" |
 
 ---
 
 ## Appendix B. Wire Layout Algorithm
 
-**Input:** `original_file_length`, `segment_code`  
+**Input:** `original_file_length`, `segment_code`
 **Output:** `(m, B, B_m, plaintext_padding)`
 
 ### B.1. Ciphertext Length
@@ -661,10 +662,10 @@ This appendix is non-normative.
 
 **segment_code selection** is a local sender policy. This specification requires only that the chosen code be written into SMB and validated by peers. Example policy:
 
-| File size | Suggested code |
-|-----------|----------------|
-| ≤ 16 MiB | 0 (V2) |
-| > 16 MiB | 4 (128 MiB segments) |
+| File size | Suggested code       |
+| --------- | -------------------- |
+| ≤ 16 MiB | 0 (V2)               |
+| > 16 MiB  | 4 (128 MiB segments) |
 
 **Streaming.** Edition V2.1 is intended to allow segment-sized buffers; Edition V2 implies a single GCM over the full padded plaintext.
 
