@@ -24,10 +24,10 @@ Internet-Draft（Informational）
 
 本文档定义 **12C Stateless Relay Transfer** 对象格式：定长元数据块（SMB）、AES-256-GCM 载荷保护、基于 Wire 块的 Merkle 完整性校验，以及用于不透明块存储的确定性 Token 标识符。
 
-规定两种载荷加密版本：
+规定两种载荷加密方式，分别对应两个协议版本：
 
-- **版本 V2** — 对完整填充明文执行单次 GCM。
-- **版本 V2.1** — 对明文分段执行多次独立 GCM；SMB 线速尺寸与 `version` 字节不变。
+- **V2** — 对完整填充明文执行单次 GCM。
+- **V2.1** — 对明文分段执行多次独立 GCM；SMB 线速尺寸与 `version` 字节不变。
 
 传输、存储路由与 HTTP API 不在范围内。对等方通过 Token 标识符交换不透明字节块。
 

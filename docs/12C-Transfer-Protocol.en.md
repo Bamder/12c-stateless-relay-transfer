@@ -24,10 +24,10 @@ July 2026
 
 This document defines the **12C Stateless Relay Transfer** object format: a fixed-layout metadata block (SMB), AES-256-GCM payload protection, Merkle integrity over wire blocks, and deterministic token identifiers for opaque blob storage.
 
-Two payload encryption editions are specified:
+Two payload encryption modes are defined, one per protocol edition:
 
-- **Edition V2** — one GCM operation over the full padded plaintext.
-- **Edition V2.1** — multiple independent GCM operations over plaintext segments; SMB wire size and `version` octet unchanged.
+- **V2** — one GCM operation over the full padded plaintext.
+- **V2.1** — multiple independent GCM operations over plaintext segments; SMB wire size and `version` octet unchanged.
 
 Transport, storage routing, and HTTP APIs are out of scope. Peers are assumed to exchange opaque octet blobs keyed by token identifiers.
 
