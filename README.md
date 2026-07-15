@@ -195,3 +195,7 @@ First-time WASM builds need Emscripten (`.\build.ps1 -SetupEmsdk -EmsdkRoot <ems
 For frontend hot reload of **Client**, use Vite (`.\start.ps1` → `:5173`) instead; see [`client/README.md`](client/README.md).
 
 Full walkthrough (tunnels, troubleshooting): [`HOW_TO_SETUP.md`](HOW_TO_SETUP.md).
+
+---
+
+Contact us at https://github.com/Bamder/12c-stateless-relay-transfer
