@@ -2,7 +2,7 @@
 Internet-Draft（Informational）
 12C 无状态中继传输协议
 密码学与 Wire 格式规范
-版本 2
+文档版本 1
 2026 年 7 月
 ```
 
@@ -13,7 +13,7 @@ Internet-Draft（Informational）
 |          |                         |
 | -------- | ----------------------- |
 | 文档编号 | 12C-Transfer-Protocol   |
-| 版本     | 2                       |
+| 文档版本 | 1                       |
 | 日期     | 2026 年 7 月            |
 | 类别     | Informational（信息性） |
 | 范围     | 线速密码学与对象布局    |

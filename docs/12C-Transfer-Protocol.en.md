@@ -2,7 +2,7 @@
 Internet-Draft (Informational)
 12C Stateless Relay Transfer Protocol
 Cryptography and Wire Format Specification
-Version 2
+Document Version 1
 July 2026
 ```
 
@@ -10,13 +10,13 @@ July 2026
 
 ## Cryptography and Wire Format Specification
 
-|          |                                        |
-| -------- | -------------------------------------- |
-| Document | 12C-Transfer-Protocol                  |
-| Version  | 2                                      |
-| Date     | July 2026                              |
-| Category | Informational                          |
-| Scope    | On-wire cryptography and object layout |
+|                  |                                        |
+| ---------------- | -------------------------------------- |
+| Document         | 12C-Transfer-Protocol                  |
+| Document Version | 1                                      |
+| Date             | July 2026                              |
+| Category         | Informational                          |
+| Scope            | On-wire cryptography and object layout |
 
 ---
 
