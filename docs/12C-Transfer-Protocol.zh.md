@@ -48,7 +48,7 @@ Internet-Draft（Informational）
 3. [协议模型](#3-协议模型)
 4. [凭证](#4-凭证)
 5. [密码学算法](#5-密码学算法)
-6. [SMB — 无状态元数据块](#6-smb--无状态元数据块)
+6. [SMB — 超级元数据块](#6-smb--超级元数据块)
 7. [载荷加密](#7-载荷加密)
 8. [Wire 编码](#8-wire-编码)
 9. [Merkle 完整性树](#9-merkle-完整性树)
@@ -96,7 +96,7 @@ Internet-Draft（Informational）
 | 术语 | 定义 |
 |------|------|
 | 凭证（Credential） | 12 字符码：6 字符搜索码 + 6 字符密钥码 |
-| SMB | Stateless Metadata Block；345 字节定长元数据 |
+| SMB | Super Metadata Block；345 字节定长元数据 |
 | S_enc | 经 K_smb 加密的 SMB 明文；373 字节 |
 | Token | 64 字符小写十六进制标识符，标记一个 Wire 块 |
 | Wire 块 | 存于某一 Token 下的字节串 |
@@ -233,7 +233,7 @@ SMB 摘要与 Merkle 节点均使用 SHA-256。
 
 ---
 
-## 6. SMB — 无状态元数据块
+## 6. SMB — 超级元数据块
 
 SMB 为**固定顺序 Schema**（类协议头），非自描述映射。按序消费字段；结构之后的多余尾部字节**必须**导致拒绝。
 

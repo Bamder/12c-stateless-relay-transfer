@@ -48,7 +48,7 @@ Implementations claiming **V2** conformance MUST support `segment_code = 0`. Imp
 3. [Protocol Model](#3-protocol-model)
 4. [Credential](#4-credential)
 5. [Cryptographic Algorithms](#5-cryptographic-algorithms)
-6. [SMB — Stateless Metadata Block](#6-smb--stateless-metadata-block)
+6. [SMB — Super Metadata Block](#6-smb--super-metadata-block)
 7. [Payload Encryption](#7-payload-encryption)
 8. [Wire Encoding](#8-wire-encoding)
 9. [Merkle Integrity Tree](#9-merkle-integrity-tree)
@@ -96,7 +96,7 @@ Out of scope: blob upload/download protocols, replication, TTL policy, TLS usage
 | Term | Definition |
 |------|------------|
 | Credential | 12-character code: 6-character search code + 6-character key code |
-| SMB | Stateless Metadata Block; 345-octet fixed metadata |
+| SMB | Super Metadata Block; 345-octet fixed metadata |
 | S_enc | SMB plaintext encrypted with K_smb; 373 octets |
 | Token | 64-character lowercase hex identifier labeling one wire blob |
 | Wire blob | Octet string stored under one token |
@@ -233,7 +233,7 @@ SHA-256 is used for SMB digests and Merkle nodes.
 
 ---
 
-## 6. SMB — Stateless Metadata Block
+## 6. SMB — Super Metadata Block
 
 SMB is a **fixed sequential schema** (header-like layout), not a self-describing map. Fields are consumed in order; any trailing octets after the declared structure MUST cause rejection.
 

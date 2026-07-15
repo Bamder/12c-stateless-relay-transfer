@@ -110,3 +110,4 @@ client/core/twelve_c_wasm/third_party/*.zip
 *.tmp
 *.temp
 .cache/
+*.posf
